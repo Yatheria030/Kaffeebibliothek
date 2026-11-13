@@ -1,0 +1,244 @@
+<!doctype html>
+<html lang="de">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Kaffeebibliothek</title>
+<meta name="description" content="Selbst gehostete Kaffee-App: Bibliothek, Chargen, Bewertungen, Mahlkompass, Mahlkönig- und Decent-Anbindung. Ein Container, SQLite, keine Cloud.">
+<link rel="alternate" hreflang="en" href="en.html">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --bg: #F6F6F4; --card: #FFFFFF; --ink: #1B1D1A; --ink2: #4A4E48; --ink3: #7C8079; --line: #E4E4DF;
+    --accent: #2F6B4F; --accent-soft: #E3EFE8; --shadow: 0 1px 2px rgba(0,0,0,.04), 0 8px 30px rgba(0,0,0,.06);
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --bg: #121412; --card: #1B1E1B; --ink: #ECEDEA; --ink2: #B9BDB6; --ink3: #8A8F87; --line: #2B2F2B;
+      --accent: #6FB08E; --accent-soft: #1F3328; --shadow: 0 1px 2px rgba(0,0,0,.3), 0 8px 30px rgba(0,0,0,.35);
+    }
+  }
+  :root[data-theme="dark"] {
+    --bg: #121412; --card: #1B1E1B; --ink: #ECEDEA; --ink2: #B9BDB6; --ink3: #8A8F87; --line: #2B2F2B;
+    --accent: #6FB08E; --accent-soft: #1F3328; --shadow: 0 1px 2px rgba(0,0,0,.3), 0 8px 30px rgba(0,0,0,.35);
+  }
+  * { box-sizing: border-box; }
+  html { -webkit-text-size-adjust: 100%; }
+  body { margin: 0; background: var(--bg); color: var(--ink); font: 400 17px/1.6 Manrope, system-ui, sans-serif; }
+  a { color: var(--accent); }
+  .wrap { max-width: 1120px; margin: 0 auto; padding: 0 16px; }
+  header { padding: 72px 0 40px; }
+  .lang { position: absolute; top: 20px; right: 16px; font-size: 14px; font-weight: 700; }
+  .lang a { text-decoration: none; }
+  header { position: relative; }
+  .eyebrow { font-size: 12px; font-weight: 700; letter-spacing: .08em; text-transform: uppercase; color: var(--accent); }
+  h1 { font-size: clamp(38px, 6vw, 64px); line-height: 1.05; letter-spacing: -.02em; margin: 10px 0 18px; font-weight: 800; }
+  .lead { font-size: clamp(18px, 2.2vw, 21px); color: var(--ink2); max-width: 720px; margin: 0; }
+  .cta { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 28px; }
+  .btn { display: inline-flex; align-items: center; height: 44px; padding: 0 20px; border-radius: 12px; font-weight: 700;
+         text-decoration: none; font-size: 15px; }
+  .btn.primary { background: var(--accent); color: #fff; }
+  .btn.ghost { background: var(--card); color: var(--ink); box-shadow: inset 0 0 0 1px var(--line); }
+  .pills { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 22px; padding: 0; list-style: none; }
+  .pills li { background: var(--accent-soft); color: var(--accent); font-size: 13px; font-weight: 700; padding: 5px 12px; border-radius: 999px; }
+  figure { margin: 0; }
+  .shot { display: block; width: 100%; height: auto; border-radius: 14px; box-shadow: var(--shadow); border: 1px solid var(--line); background: var(--card); }
+  .hero-shot { margin: 8px 0 24px; }
+  section { padding: 56px 0; border-top: 1px solid var(--line); }
+  h2 { font-size: clamp(26px, 3.6vw, 36px); line-height: 1.15; letter-spacing: -.01em; margin: 6px 0 14px; font-weight: 800; }
+  .split { display: grid; grid-template-columns: minmax(0, 1fr); gap: 28px; align-items: center; }
+  @media (min-width: 900px) { .split { grid-template-columns: minmax(0, 5fr) minmax(0, 7fr); gap: 48px; } .split.flip > :first-child { order: 2; } }
+  .split p { color: var(--ink2); margin: 0 0 12px; }
+  ul.checks { list-style: none; padding: 0; margin: 14px 0 0; }
+  ul.checks li { position: relative; padding-left: 26px; margin: 8px 0; color: var(--ink2); }
+  ul.checks li::before { content: ""; position: absolute; left: 2px; top: .55em; width: 12px; height: 7px; border-left: 2.5px solid var(--accent);
+                         border-bottom: 2.5px solid var(--accent); transform: rotate(-45deg); }
+  ul.checks b { color: var(--ink); }
+  .grid { display: grid; grid-template-columns: minmax(0, 1fr); gap: 16px; margin-top: 24px; }
+  @media (min-width: 640px) { .grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+  @media (min-width: 960px) { .grid { grid-template-columns: repeat(3, minmax(0, 1fr)); } }
+  .card { background: var(--card); border-radius: 14px; padding: 20px; box-shadow: var(--shadow); }
+  .card h3 { margin: 0 0 6px; font-size: 17px; }
+  .card p { margin: 0; color: var(--ink2); font-size: 15px; }
+  .phones { display: flex; gap: 16px; justify-content: center; flex-wrap: wrap; }
+  .phones img { width: min(280px, 44vw); }
+  .gallery { display: grid; grid-template-columns: minmax(0, 1fr); gap: 20px; margin-top: 24px; }
+  @media (min-width: 800px) { .gallery { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+  figcaption { font-size: 14px; color: var(--ink3); margin-top: 8px; }
+  pre { background: var(--card); border-radius: 12px; padding: 16px 18px; overflow-x: auto; box-shadow: inset 0 0 0 1px var(--line);
+        font: 14px/1.6 ui-monospace, SFMono-Regular, Menlo, monospace; }
+  footer { padding: 40px 0 64px; color: var(--ink3); font-size: 14px; border-top: 1px solid var(--line); }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <div class="lang"><b>DE</b> · <a href="en.html" hreflang="en">EN</a></div>
+    <div class="eyebrow">Selbst gehostet · Open Source · MIT</div>
+    <h1>Kaffeebibliothek</h1>
+    <p class="lead">Deine Kaffees wie eine Bibliothek, und eine Espressomaschine, die mitdenkt. Die App liest neue Kaffees selbst aus,
+      holt jeden Mahlvorgang von der Mühle und jeden Shot von der Maschine und sagt dir, wo der Mahlgrad für den nächsten Shot hin muss.
+      Mit Begründung, in Mikrometern.</p>
+    <div class="cta">
+      <a class="btn primary" href="https://github.com/Yatheria030/kaffeebibliothek">Auf GitHub ansehen</a>
+      <a class="btn ghost" href="#start">In 2 Minuten starten</a>
+    </div>
+    <ul class="pills">
+      <li>Ein Container</li><li>SQLite</li><li>Kein Konto, kein Tracking</li><li>Mahlkönig E64 WS</li><li>Decent DE1</li><li>Home Assistant</li><li>Dark Mode</li><li>Automatisch freigestellt</li>
+    </ul>
+  </header>
+
+  <figure class="hero-shot"><img class="shot" src="screenshots/bibliothek.jpg" alt="Bibliothek mit freigestellten Packungen im Regal" width="1728" height="1117"></figure>
+
+  <section>
+    <div class="split">
+      <div>
+        <div class="eyebrow">Hinzufügen</div>
+        <h2>Ein Kaffee ist in Sekunden drin</h2>
+        <p>Shop-Link, Name oder Foto der Packung reicht. Die Anthropic-API sucht im Netz, liest die Seiten und füllt Herkunft, Varietät,
+          Aufbereitung, Höhe, Röstgrad, Aromen und Preis. Du siehst live, welche Seite gerade gelesen wird und welches Feld schon steht.</p>
+        <p>Das Packungsbild wird automatisch ausgerichtet und freigestellt, damit das Regal aussieht wie ein Regal. Röstereien werden
+          über Schreibweisen hinweg zusammengeführt. Ohne API-Key geht alles von Hand.</p>
+      </div>
+      <figure><img class="shot" src="screenshots/auslesen.gif" alt="Live-Auslesen: Websuche, gelesene Seiten und Felder füllen sich" loading="lazy" width="900" height="956"></figure>
+    </div>
+  </section>
+
+  <section>
+    <div class="split flip">
+      <div>
+        <div class="eyebrow">Mahlkompass</div>
+        <h2>Rät nicht, rechnet</h2>
+        <p>Für eine neue Tüte gibt es einen Startwert auf der Skala deiner Mühle: feste Regeln für Röstgrad, Filter oder Espresso, Höhe,
+          Aufbereitung, Decaf und Röstalter, plus das, was die App aus deinen eigenen Tüten gelernt hat.</p>
+        <ul class="checks">
+          <li><b>Lernt lokal</b>: Ridge-Regression über deine Tüten, Kreuzvalidierung Tüte für Tüte, keine Cloud</li>
+          <li><b>Folgt jedem Shot</b>: Zeit aufs Zielverhältnis umgerechnet und über die gelernte Steigung in µm übersetzt</li>
+          <li><b>Schmeckt mit</b>: sauer oder bitter verschiebt den Wert je Kaffee, gebremst</li>
+          <li><b>Nachvollziehbar</b>: Der Kompass-Pfad zeigt jeden Beitrag einzeln</li>
+        </ul>
+      </div>
+      <figure><img class="shot" src="screenshots/kaffee.jpg" alt="Kaffee-Detail mit Mahlkompass" loading="lazy" width="1728" height="1117"></figure>
+    </div>
+  </section>
+
+  <section>
+    <div class="split">
+      <div>
+        <div class="eyebrow">Mühle und Maschine</div>
+        <h2>Du sagst nur noch, wie er war</h2>
+        <ul class="checks">
+          <li><b>Mahlkönig E64 WS</b>: Mahlvorgänge direkt aus der Weboberfläche der Mühle im Heimnetz, nur lesend. Optional über Mahlkönig Sync</li>
+          <li><b>Decent DE1</b>: Plugin für die de1app schickt jeden Shot mit Druck-, Fluss- und Gewichtskurve, dazu das ganze Archiv</li>
+          <li><b>Profil je Kaffee</b>: Preinfusion, Temperatur und Stopp-Gewicht passend zum Ziel, abgeglichen mit dem Tablet. Vorhandene Profile bleiben unberührt</li>
+          <li><b>Home Assistant</b>: Temperatur, Wasser und Zustand live, Maschine und Dampf schaltbar</li>
+        </ul>
+        <p style="margin-top:14px"><b>Optimiert für Decent und Mahlkönig</b>, offen für mehr: Jede Maschine und jede Mühle, die ihre Shots oder Mahlvorgänge hergibt, lässt sich anbinden. Du hast so ein Gerät? <a href="https://github.com/Yatheria030/kaffeebibliothek/issues">Mach ein Issue auf</a>.</p>
+        <p>Mahlvorgang und Shot werden über die Zeit gepaart. Der Dialog zeigt Verhältnis, Zeit, Preinfusion und den nächsten Mahlgrad groß, gegen dein Zielfenster.</p>
+      </div>
+      <figure><img class="shot" src="screenshots/bewerten.jpg" alt="Bewertungsdialog mit Mahlgrad-Regler und Shot-Auswertung" loading="lazy" width="1728" height="1117"></figure>
+    </div>
+  </section>
+
+  <section>
+    <div class="eyebrow">Bewerten</div>
+    <h2>So ausführlich, wie du Lust hast</h2>
+    <p style="color:var(--ink2);max-width:760px;margin:0">Schnell mit Kurzurteil („zu sauer“, „ausgewogen“) und Sternen, oder voll nach dem
+      SCA-Cupping-Bogen mit Aromarad. Beides zählt getrennt, damit Sterne keine Scores verwässern.</p>
+    <div class="gallery">
+      <figure><img class="shot" src="screenshots/bewerten-schnell.jpg" alt="Schnellbewertung mit Kurzurteil, Sternen und Shot-Auswertung" loading="lazy" width="1728" height="1117">
+        <figcaption><b>Schnell</b>: Kurzurteil und Sterne, darunter die Shot-Auswertung gegen dein Zielfenster.</figcaption></figure>
+      <figure><img class="shot" src="screenshots/bewerten-sca-2.jpg" alt="SCA-Cupping-Bogen mit Score und Radar" loading="lazy" width="1728" height="1117">
+        <figcaption><b>SCA-Bogen</b>: sieben Attribute in 0,25er-Schritten, Tassen, Defekte, Score mit Stufe und Radar.</figcaption></figure>
+      <figure><img class="shot" src="screenshots/bewerten-aromen-dunkel.jpg" alt="Aromarad im Dark Mode" loading="lazy" width="1728" height="1117">
+        <figcaption><b>Aromarad</b> nach SCA/WCR, mehrere Noten je Bezug.</figcaption></figure>
+      <figure><img class="shot" src="screenshots/kaffee-dunkel.jpg" alt="Kaffee-Detail mit Radar im Dark Mode" loading="lazy" width="1728" height="1117">
+        <figcaption><b>Geschmack nach Rezept</b>: Radar und Score je Rezept am Kaffee.</figcaption></figure>
+    </div>
+  </section>
+
+  <section>
+    <div class="eyebrow">Hell und dunkel</div>
+    <h2>Sieht nachts genauso gut aus</h2>
+    <p style="color:var(--ink2);max-width:760px;margin:0">Der Dark Mode folgt dem System, jede Seite ist für beide Modi gebaut, von 390 bis 1728 px.</p>
+    <div class="gallery">
+      <figure><img class="shot" src="screenshots/statistik-dunkel.jpg" alt="Statistik im Dark Mode" loading="lazy" width="1728" height="1117"></figure>
+      <figure><img class="shot" src="screenshots/bezuege-dunkel.jpg" alt="Bezüge im Dark Mode" loading="lazy" width="1728" height="1117"></figure>
+    </div>
+  </section>
+
+  <section>
+    <div class="eyebrow">Unter der Haube</div>
+    <h2>Technik, die man nicht sieht</h2>
+    <div class="grid">
+      <div class="card"><h3>Automatisch freigestellt</h3><p>Hintergrundfarbe aus dem Bildrand, Flutfüllung von außen, Schatten werden halbtransparent statt hart abgeschnitten. Helle Tüten ohne Kontur bleiben ganz.</p></div>
+      <div class="card"><h3>Automatisch ausgerichtet</h3><p>Die Packung wird als Umriss gefunden und auf ein Quadrat mit festen Rändern gesetzt. Jede Tüte steht gleich groß im Regal.</p></div>
+      <div class="card"><h3>Live-Auslesen</h3><p>Die Antwort der Anthropic-API kommt als NDJSON-Stream: Websuche, gelesene Seiten und halbfertige Felder erscheinen sofort.</p></div>
+      <div class="card"><h3>Ridge-Regression</h3><p>Der Kompass lernt nur die Abweichung von festen Regeln, λ per Leave-one-bag-out. Die erste Tüte ist schon brauchbar.</p></div>
+      <div class="card"><h3>Hopper-Alterung</h3><p>Die Steigung µm je Sekunde wird aus Shots derselben Tüte nachgeschärft, die Tage seit dem ersten Shot gehen mit ein.</p></div>
+      <div class="card"><h3>Paarung über die Zeit</h3><p>Shot und Mahlvorgang finden sich über die Uhrzeit, mit Toleranz für abweichende Uhren. Eins wählen, das andere kommt mit.</p></div>
+      <div class="card"><h3>Mühlen-Datenbank</h3><p>Die E64 WS liefert ihre SQLite-DB über die Weboberfläche. Spülen, Leerlauf und Vormahlen fallen weg, an der Mühle wird nichts geändert.</p></div>
+      <div class="card"><h3>Decent-Plugin in Tcl</h3><p>Shots, Archiv und Profile in beide Richtungen, das Altformat wird im Server zerlegt. Vorhandene Profile bleiben unberührt.</p></div>
+      <div class="card"><h3>Stimmige Sicherung</h3><p>ZIP aus eigenem Code, die Datenbank per <code>VACUUM INTO</code> im laufenden Betrieb. SQLite über <code>node:sqlite</code>, ohne native Abhängigkeit.</p></div>
+    </div>
+  </section>
+
+  <section>
+    <div class="eyebrow">Alles auf einen Blick</div>
+    <h2>Lager, Bezüge, Statistik</h2>
+    <div class="gallery">
+      <figure><img class="shot" src="screenshots/lager.jpg" alt="Lager mit Trinkfenstern" loading="lazy" width="1728" height="1117">
+        <figcaption><b>Lager</b>: Trinkfenster nach recherchierten Röster-Werten, sortiert nach „Als Nächstes öffnen“.</figcaption></figure>
+      <figure><img class="shot" src="screenshots/bezuege.jpg" alt="Bezüge mit Mühle und Maschine" loading="lazy" width="1728" height="1117">
+        <figcaption><b>Bezüge</b>: jeder Shot mit Rezept, Mahlvorgang und Maschine, Abweichung vom Rezept in Prozent.</figcaption></figure>
+      <figure><img class="shot" src="screenshots/statistik.jpg" alt="Statistik" loading="lazy" width="1728" height="1117">
+        <figcaption><b>Statistik</b>: Kosten je Kilo und Tasse, Bestenliste, Verlauf, Geschmacksprofil, Weltkarte.</figcaption></figure>
+      <figure><img class="shot" src="screenshots/mahlkompass.jpg" alt="Wiki-Artikel Mahlkompass" loading="lazy" width="1728" height="1117">
+        <figcaption><b>Kaffeewissen</b>: eingebautes Wiki, verlinkt mit deinen Kaffees.</figcaption></figure>
+    </div>
+  </section>
+
+  <section>
+    <div class="eyebrow">Und der Rest</div>
+    <h2>Durchdacht bis ins Detail</h2>
+    <div class="grid">
+      <div class="card"><h3>SCA-Bogen oder schnell</h3><p>Kurzurteil und Sterne für jeden Tag, der volle Cupping-Bogen mit Aromarad, wenn es zählt. Beides getrennt ausgewertet.</p></div>
+      <div class="card"><h3>Chargen statt Restmengen</h3><p>Jede Tüte mit Röstdatum und Status. Kein Abwiegen, keine Buchhaltung.</p></div>
+      <div class="card"><h3>Was passt zu mir?</h3><p>Profil aus deinen Bewertungen, auf Wunsch sucht die Anthropic-API bei deinen Röstereien nach Neuem.</p></div>
+      <div class="card"><h3>Erste Schritte</h3><p>Ein Assistent geht beim ersten Start alle Einstellungen durch: Pflicht, Optional, Empfohlen.</p></div>
+      <div class="card"><h3>Sicherung</h3><p>ZIP mit Datenbank und Bildern auf Knopfdruck und jede Nacht, mit einstellbarer Aufbewahrung.</p></div>
+      <div class="card"><h3>Überall zu Hause</h3><p>Installierbar auf Handy und Desktop, Dark Mode nach System, gebaut von 390 bis 1728 px.</p></div>
+    </div>
+    <div class="phones" style="margin-top:32px">
+      <img class="shot" src="screenshots/handy-kaffee.jpg" alt="Kaffee auf dem Handy" loading="lazy" width="390" height="844">
+      <img class="shot" src="screenshots/handy-bibliothek-dunkel.jpg" alt="Bibliothek auf dem Handy, dunkel" loading="lazy" width="390" height="844">
+    </div>
+  </section>
+
+  <section>
+    <div class="split">
+      <div>
+        <div class="eyebrow">Privat</div>
+        <h2>Deine Daten bleiben bei dir</h2>
+        <p>Ein Container, eine SQLite-Datei, ein Bilderordner. Kein Konto, kein Tracking. Nach außen geht nur, was du einschaltest:
+          die Anthropic-API zum Auslesen und optional Mahlkönig Sync.</p>
+      </div>
+      <figure><img class="shot" src="screenshots/erste-schritte.jpg" alt="Assistent Erste Schritte" loading="lazy" width="1728" height="1117"></figure>
+    </div>
+  </section>
+
+  <section id="start">
+    <div class="eyebrow">Start</div>
+    <h2>In 2 Minuten laufen lassen</h2>
+    <pre>git clone https://github.com/Yatheria030/kaffeebibliothek.git
+cd kaffeebibliothek
+docker compose up -d --build</pre>
+    <p style="color:var(--ink2)">Dann <code>http://localhost:8790</code> öffnen. Ohne Docker: <code>npm ci && npm run build && npm start</code> mit Node 24.
+      Alles Weitere steht in der <a href="https://github.com/Yatheria030/kaffeebibliothek#readme">README</a> (<a href="https://github.com/Yatheria030/kaffeebibliothek/blob/main/README.de.md">auf Deutsch</a>).</p>
+  </section>
+</div>
+<footer><div class="wrap">Kaffeebibliothek · MIT-Lizenz · Hono, node:sqlite, React 19, Vite, Tailwind 4</div></footer>
+</body>
+</html>

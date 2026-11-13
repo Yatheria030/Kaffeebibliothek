@@ -1,0 +1,19 @@
+# Beispiel: docker compose up -d --build. ./data: SQLite-Datenbank und Bilder, ./backups: nächtliche ZIP-Sicherung.
+# ./.env (optional): ANTHROPIC_API_KEY, alternativ Key in den Einstellungen der App.
+services:
+  kaffee:
+    build: .
+    image: kaffeebibliothek:local
+    restart: unless-stopped
+    user: "1000:1000"
+    ports:
+      - "8790:8790"
+    environment:
+      TZ: Europe/Berlin
+      BACKUP_DIR: /backups
+    env_file:
+      - path: .env
+        required: false
+    volumes:
+      - ./data:/data
+      - ./backups:/backups
