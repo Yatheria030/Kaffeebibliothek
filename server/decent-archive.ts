@@ -210,7 +210,7 @@ export function saveArchiveFile(p: string, mtime: number | null, body: string, f
   else data = { format: "legacy", ...tclDict(body) };
   data = redact(data) as Obj;
   const clock = kind.startsWith("shot") ? Math.round(Number(data.clock ?? data.timestamp)) : null;
-  if (kind.startsWith("shot") && !(clock! > 1e9)) throw new ArchiveError("Shot ohne Zeitpunkt (clock)");
+  if (kind.startsWith("shot") && !(clock! > 1e9 && clock! < 1e10)) throw new ArchiveError("Shot ohne gültigen Zeitpunkt (clock)");
   const text = JSON.stringify(data);
   db.prepare(
     `INSERT INTO decent_files (path, kind, clock, mtime, size, data, received_at) VALUES (?, ?, ?, ?, ?, ?, ?)

@@ -28,8 +28,8 @@ function dosTime(d: Date) {
 }
 
 /** Kleiner ZIP-Schreiber: Dateien nacheinander in eine Datei, Bilder unkomprimiert (sind schon gepackt) */
-/** Bilder erst beim Schreiben laden, damit nie alle gleichzeitig im Speicher liegen */
-export type ZipFile = { name: string; load: () => Promise<Buffer>; compress: boolean; mtime: Date };
+/** Bilder erst beim Schreiben laden, damit nie alle gleichzeitig im Speicher liegen; null = inzwischen weg, wird übersprungen */
+export type ZipFile = { name: string; load: () => Promise<Buffer | null>; compress: boolean; mtime: Date };
 
 export async function writeZip(target: string, files: ZipFile[]) {
   const fh = await open(target, "w");
@@ -39,6 +39,7 @@ export async function writeZip(target: string, files: ZipFile[]) {
     for (const f of files) {
       const name = Buffer.from(f.name, "utf8");
       const data = await f.load();
+      if (!data) continue;
       const body = f.compress ? deflateRawSync(data, { level: 6 }) : data;
       const method = f.compress ? 8 : 0;
       const { time, date } = dosTime(f.mtime);
@@ -115,7 +116,9 @@ export function writeBackup(target: string): Promise<void> {
         if (f.startsWith(".")) continue;
         const p = path.join(IMAGE_DIR, f);
         const st = await stat(p);
-        if (st.isFile()) files.push({ name: `images/${f}`, load: () => readFile(p), compress: false, mtime: st.mtime });
+        // Ein Bild kann zwischen Liste und Lesen gelöscht werden (Kaffee gelöscht, Bild ersetzt): dann ohne es weiter
+        const load = () => readFile(p).catch((e: NodeJS.ErrnoException) => (e.code === "ENOENT" ? null : Promise.reject(e)));
+        if (st.isFile()) files.push({ name: `images/${f}`, load, compress: false, mtime: st.mtime });
       }
       await writeZip(part, files);
       await rename(part, target);
@@ -174,21 +177,25 @@ function msUntilNext(): number {
 
 let timer: NodeJS.Timeout | null = null;
 let catchUp: NodeJS.Timeout | null = null;
+/** Jeder Neuplan zählt hoch; ältere Ketten (laufende Sicherung, späte Backup-Liste) planen danach nicht mehr nach */
+let generation = 0;
 
 /** Täglich zur eingestellten Uhrzeit (Ortszeit der Einstellung); fehlt eine Sicherung der letzten 26 h, kommt 60 s später gleich eine */
 function plan(start: boolean) {
   if (timer) clearTimeout(timer);
   if (catchUp) clearTimeout(catchUp);
   timer = catchUp = null;
+  const gen = ++generation;
   const dir = backupDir();
   if (!dir) return;
   const loop = () => {
+    if (gen !== generation) return;
     timer = setTimeout(() => void nightly().finally(loop), msUntilNext()).unref();
   };
   loop();
   void listBackups().then((list) => {
     const newest = list[0] ? Date.parse(list[0].at) : 0;
-    if (Date.now() - newest > 26 * 3600_000) catchUp = setTimeout(() => void nightly(), 60_000).unref();
+    if (gen === generation && Date.now() - newest > 26 * 3600_000) catchUp = setTimeout(() => void nightly(), 60_000).unref();
   });
   const c = cfg();
   if (start) console.log(`Nächtliche Sicherung nach ${dir} um ${c.backup_time} (${c.timezone}), ${c.backup_keep} bleiben`);

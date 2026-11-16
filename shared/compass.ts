@@ -131,9 +131,10 @@ export const AGE_PCT = { ref: 14, perWeek: -0.015, min: -0.05, max: 0.04 };
 
 const clamp = (v: number, lo: number, hi: number) => Math.min(hi, Math.max(lo, v));
 
-/** „1.800–2.000 m“ → 1900; Werte unter 100 m gelten als Fehlangabe */
+/** „1.800–2.000 m“ oder „1,800 masl“ → Meter (Mittel); Werte unter 100 m gelten als Fehlangabe */
 export function altitudeM(s: string): number | null {
-  const nums = (s.replace(/\./g, "").match(/\d{3,4}/g) ?? []).map(Number).filter((n) => n >= 100 && n <= 3500);
+  // Tausendertrenner beider Schreibweisen weg, sonst wird aus „1,800“ die 800
+  const nums = (s.replace(/(\d)[.,](?=\d{3}(?!\d))/g, "$1").match(/\d{3,4}/g) ?? []).map(Number).filter((n) => n >= 100 && n <= 3500);
   return nums.length ? nums.reduce((a, b) => a + b, 0) / nums.length : null;
 }
 

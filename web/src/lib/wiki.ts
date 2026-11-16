@@ -595,7 +595,8 @@ export const WIKI_ARTICLES: WikiArticle[] = [
         h: "Lagerung",
         body: [
           "Sauerstoff, Licht, Wärme und Feuchtigkeit lassen Aromen schneller verfliegen. Der Röstbeutel mit Ventil ist ein guter Ort. Helle Röstungen bleiben länger gut als dunkle, nach dem Fenster wird Kaffee langsam flacher, nicht schlecht. Offene Packungen lieber zügig aufbrauchen und eine nach der anderen öffnen.",
-          "Einfrieren funktioniert gut, wenn der Kaffee portioniert und luftdicht verpackt ist. Gefrorene Bohnen direkt mahlen, nicht wiederholt auftauen.",
+          "Einfrieren funktioniert gut, wenn der Kaffee portioniert und luftdicht verpackt ist. Bei −18 °C altert er praktisch nicht. Eine ganze Tüte geschlossen auftauen lassen, bis sie Raumtemperatur hat, erst dann öffnen, sonst schlägt sich Wasser auf den Bohnen nieder. Portionen kann man auch gefroren direkt mahlen. Nicht wiederholt auftauen und einfrieren.",
+          { tip: "Im Lager markierst du eine Tüte als eingefroren; die Tage im Gefrierfach zählen nicht zum Alter. Hast du mehr als die nächste Packung im Vorrat, empfiehlt das Lager, die übrigen einzufrieren." },
         ],
       },
     ],

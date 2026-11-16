@@ -1,4 +1,4 @@
-import { CircleAlert, CircleCheck, X } from "lucide-react";
+import { CircleAlert, CircleCheck, Timer, X } from "lucide-react";
 import { useEffect, useRef, useState, useSyncExternalStore, type KeyboardEvent as ReactKeyboardEvent, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import { Button, cx } from "./controls.tsx";
@@ -218,24 +218,64 @@ export function ConfirmHost() {
 
 // ---------- Toast ----------
 
-type ToastMsg = { id: number; text: string; tone: "ok" | "error" };
+type ToastAction = { label: string; onClick: () => void };
+type ToastMsg = { id: number; text: string; tone: "ok" | "error" | "info"; action?: ToastAction; title?: string; top?: boolean };
+/** `top`: oben rechts (Handy oben über die Breite), mit Überschrift, für Hinweise, die man in Ruhe liest; `ms` überschreibt die Dauer */
+type ToastOpts = { top?: boolean; title?: string; ms?: number };
 let toasts: ToastMsg[] = [];
 let toastId = 0;
 const toastListeners = new Set<() => void>();
 const emitToast = () => toastListeners.forEach((l) => l());
-
-export function toast(text: string, tone: ToastMsg["tone"] = "ok") {
-  const id = ++toastId;
-  toasts = [...toasts.slice(-2), { id, text, tone }];
+const dropToast = (id: number) => {
+  toasts = toasts.filter((t) => t.id !== id);
   emitToast();
-  setTimeout(
-    () => {
-      toasts = toasts.filter((t) => t.id !== id);
-      emitToast();
-    },
-    tone === "error" ? 5200 : 2800,
+};
+
+export function toast(text: string, tone: ToastMsg["tone"] = "ok", action?: ToastAction, opts: ToastOpts = {}) {
+  const id = ++toastId;
+  const same = toasts.filter((t) => !!t.top === !!opts.top);
+  const keep = new Set(same.slice(-2).map((t) => t.id));
+  toasts = [...toasts.filter((t) => !!t.top !== !!opts.top || keep.has(t.id)), { id, text, tone, action, title: opts.title, top: opts.top }];
+  emitToast();
+  setTimeout(() => dropToast(id), opts.ms ?? (action ? 8000 : tone === "error" ? 5200 : 2800));
+}
+
+function ToastIcon({ tone }: { tone: ToastMsg["tone"] }) {
+  if (tone === "error") return <CircleAlert size={17} className="shrink-0 text-[#FF6961]" />;
+  if (tone === "info") return <Timer size={17} className="shrink-0 text-[#7fb0e6]" />;
+  return <CircleCheck size={17} className="shrink-0 text-[#30D158]" />;
+}
+
+function ToastClose({ id }: { id: number }) {
+  return (
+    <button
+      type="button"
+      aria-label="Schließen"
+      onClick={() => dropToast(id)}
+      className="ml-1 flex size-6 shrink-0 items-center justify-center rounded-full text-white/60 hover:bg-white/10 hover:text-white"
+    >
+      <X size={14} />
+    </button>
   );
 }
+
+function ToastActionButton({ t }: { t: ToastMsg }) {
+  if (!t.action) return null;
+  return (
+    <button
+      type="button"
+      onClick={() => {
+        t.action!.onClick();
+        dropToast(t.id);
+      }}
+      className="shrink-0 rounded-full bg-white/15 px-3 py-1 text-[13px] font-bold text-white hover:bg-white/25"
+    >
+      {t.action.label}
+    </button>
+  );
+}
+
+const TOAST_BG = "frost bg-[color-mix(in_srgb,#17181b_92%,transparent)] text-white shadow-pop";
 
 export function ToastHost() {
   const list = useSyncExternalStore(
@@ -245,36 +285,50 @@ export function ToastHost() {
     },
     () => toasts,
   );
+  const top = list.filter((t) => t.top);
   return createPortal(
-    <div
-      aria-live="polite"
-      className="pointer-events-none fixed inset-x-0 bottom-[max(20px,env(safe-area-inset-bottom))] z-[90] flex flex-col items-center gap-2 px-4"
-    >
-      {list.map((t) => (
-        <div
-          key={t.id}
-          className="anim-sheet frost pointer-events-auto flex max-w-[520px] items-center gap-2.5 rounded-full bg-[color-mix(in_srgb,#17181b_92%,transparent)] py-2.5 pr-3 pl-3.5 text-[14px] text-white shadow-pop"
-        >
-          {t.tone === "error" ? (
-            <CircleAlert size={17} className="shrink-0 text-[#FF6961]" />
-          ) : (
-            <CircleCheck size={17} className="shrink-0 text-[#30D158]" />
-          )}
-          <span className="min-w-0">{t.text}</span>
-          <button
-            type="button"
-            aria-label="Schließen"
-            onClick={() => {
-              toasts = toasts.filter((x) => x.id !== t.id);
-              emitToast();
-            }}
-            className="ml-1 flex size-6 shrink-0 items-center justify-center rounded-full text-white/60 hover:bg-white/10 hover:text-white"
-          >
-            <X size={14} />
-          </button>
-        </div>
-      ))}
-    </div>,
+    <>
+      <div
+        aria-live="polite"
+        className="pointer-events-none fixed inset-x-0 bottom-[calc(max(20px,env(safe-area-inset-bottom))+var(--dock-h,0px))] z-[90] flex flex-col items-center gap-2 px-4"
+      >
+        {list
+          .filter((t) => !t.top)
+          .map((t) => (
+            <div
+              key={t.id}
+              className={cx(TOAST_BG, "anim-sheet pointer-events-auto flex max-w-[520px] items-center gap-2.5 rounded-full py-2.5 pr-3 pl-3.5 text-[14px]")}
+            >
+              <ToastIcon tone={t.tone} />
+              <span className="min-w-0">{t.text}</span>
+              <ToastActionButton t={t} />
+              <ToastClose id={t.id} />
+            </div>
+          ))}
+      </div>
+      <div
+        aria-live="polite"
+        className="pointer-events-none fixed inset-x-0 top-[calc(env(safe-area-inset-top,0px)+60px)] z-[90] flex flex-col items-stretch gap-2 px-3 sm:right-5 sm:left-auto sm:w-[380px] sm:items-end sm:px-0"
+      >
+        {top.map((t) => (
+          <div key={t.id} className={cx(TOAST_BG, "anim-toast-top pointer-events-auto flex w-full items-start gap-2.5 rounded-2xl py-3 pr-2.5 pl-3.5")}>
+            <span className="pt-0.5">
+              <ToastIcon tone={t.tone} />
+            </span>
+            <div className="min-w-0 flex-1">
+              {t.title && <div className="text-[14.5px] font-bold leading-snug">{t.title}</div>}
+              <div className={cx("text-[13.5px] leading-snug", t.title && "mt-0.5 text-white/75")}>{t.text}</div>
+              {t.action && (
+                <div className="mt-2">
+                  <ToastActionButton t={t} />
+                </div>
+              )}
+            </div>
+            <ToastClose id={t.id} />
+          </div>
+        ))}
+      </div>
+    </>,
     document.body,
   );
 }

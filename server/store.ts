@@ -10,6 +10,7 @@ import type {
   CostStats,
   CoffeeDetail,
   CoffeeListItem,
+  Freeze,
   Recipe,
   RecipeListItem,
   Stats,
@@ -38,6 +39,9 @@ const json = <T>(v: unknown, fallback: T): T => {
 };
 const numOrNull = (v: unknown) => (v == null ? null : Number(v));
 const now = () => new Date().toISOString();
+/** Heutiges Datum in der eingestellten Zeitzone (process.env.TZ), nicht in UTC */
+export const localToday = (d = new Date()) =>
+  `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
 
 function mapCoffee(r: Row): Coffee {
   return {
@@ -83,6 +87,7 @@ function mapBatch(r: Row): Batch {
     price_eur: numOrNull(r.price_eur),
     status: r.status as Batch["status"],
     backfilled: Boolean(r.backfilled),
+    freezes: json<Freeze[]>(r.freezes, []),
     note: String(r.note),
     created_at: String(r.created_at),
     brew_count: Number(r.brew_count ?? 0),
@@ -138,7 +143,8 @@ export function listStock(): StockItem[] {
   const rows = db
     .prepare(
       `SELECT t.*, (SELECT COUNT(*) FROM brews b WHERE b.batch_id = t.id) AS brew_count,
-         c.name AS c_name, c.roaster AS c_roaster, c.image AS c_image, c.color AS c_color, c.roast_level AS c_roast_level, c.roast_for AS c_roast_for
+         c.name AS c_name, c.roaster AS c_roaster, c.image AS c_image, c.color AS c_color, c.roast_level AS c_roast_level, c.roast_for AS c_roast_for,
+         c.weight_g AS c_weight_g
        FROM batches t JOIN coffees c ON c.id = t.coffee_id
        WHERE t.status = 'ungeoeffnet' AND t.backfilled = 0
        ORDER BY t.roast_date, t.id`,
@@ -154,6 +160,7 @@ export function listStock(): StockItem[] {
       color: (r.c_color as string) ?? null,
       roast_level: (r.c_roast_level as StockItem["coffee"]["roast_level"]) ?? null,
       roast_for: (r.c_roast_for as StockItem["coffee"]["roast_for"]) ?? null,
+      weight_g: numOrNull(r.c_weight_g),
     },
   }));
 }
@@ -178,7 +185,7 @@ export function listCoffees(): CoffeeListItem[] {
 
   const openBatches = db
     .prepare(
-      `SELECT t.id, t.coffee_id, t.roast_date
+      `SELECT t.id, t.coffee_id, t.roast_date, t.freezes
        FROM batches t WHERE t.status = 'offen'
        ORDER BY t.roast_date DESC, t.id DESC`,
     )
@@ -224,6 +231,7 @@ export function listCoffees(): CoffeeListItem[] {
         ? {
             id: Number(ob.id),
             roast_date: (ob.roast_date as string) ?? null,
+            freezes: json<Freeze[]>(ob.freezes, []),
           }
         : null,
     };
@@ -321,12 +329,14 @@ export function createCoffee(c: CoffeeInput): number {
       ).run(
         id,
         c.first_batch.roast_date,
-        c.first_batch.status === "offen" ? now().slice(0, 10) : null,
+        c.first_batch.status === "offen" ? localToday() : null,
         c.first_batch.weight_g ?? c.weight_g,
         c.first_batch.price_eur ?? c.price_eur,
         c.first_batch.status,
         backfilledFlag(c.first_batch),
       );
+      // Fachregel: mit der ersten Charge zieht ein Merkliste-Kaffee in die Bibliothek
+      db.prepare(`UPDATE coffees SET wishlist = 0 WHERE id = ?`).run(id);
     }
     return id;
   });
@@ -393,24 +403,60 @@ export function createBatch(coffeeId: number, b: BatchInput): number | null {
   if (!db.prepare(`SELECT 1 FROM coffees WHERE id = ?`).get(coffeeId)) return null;
   const res = db
     .prepare(
-      `INSERT INTO batches (coffee_id, roast_date, opened_at, weight_g, price_eur, status, backfilled, note)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+      `INSERT INTO batches (coffee_id, roast_date, opened_at, weight_g, price_eur, status, backfilled, freezes, note)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     )
-    .run(coffeeId, b.roast_date, b.opened_at, b.weight_g, b.price_eur, b.status, backfilledFlag(b), b.note);
-  // Eine Charge heißt: gekauft, also nicht mehr nur auf der Merkliste.
+    .run(coffeeId, b.roast_date, b.opened_at, b.weight_g, b.price_eur, b.status, backfilledFlag(b), JSON.stringify(closeFreezes(b, b.freezes ?? [])), b.note);
+  // Eine Charge heißt: gekauft, also nicht mehr nur unter „Gesehen“.
   db.prepare(`UPDATE coffees SET wishlist = 0 WHERE id = ?`).run(coffeeId);
   touchCoffee(coffeeId);
   return Number(res.lastInsertRowid);
 }
 
+/** Wer eine Tüte öffnet oder leert, hat sie aufgetaut: ein offener Gefrier-Zeitraum endet am Öffnungstag (sonst heute) */
+function closeFreezes(b: { status: string; opened_at: string | null }, list: Freeze[]): Freeze[] {
+  const last = list[list.length - 1];
+  if (b.status === "ungeoeffnet" || !last || last.to) return list;
+  const end = b.opened_at && b.opened_at >= last.from ? b.opened_at : localToday();
+  return [...list.slice(0, -1), { from: last.from, to: end < last.from ? last.from : end }];
+}
+
 export function updateBatch(id: number, b: BatchInput): boolean {
+  const cur = db.prepare(`SELECT freezes FROM batches WHERE id = ?`).get(id) as Row | undefined;
+  if (!cur) return false;
+  const list = closeFreezes(b, b.freezes ?? json<Freeze[]>(cur.freezes, []));
   const res = db
     .prepare(
-      `UPDATE batches SET roast_date = ?, opened_at = ?, weight_g = ?, price_eur = ?, status = ?, backfilled = ?, note = ?
+      `UPDATE batches SET roast_date = ?, opened_at = ?, weight_g = ?, price_eur = ?, status = ?, backfilled = ?, freezes = ?, note = ?
        WHERE id = ?`,
     )
-    .run(b.roast_date, b.opened_at, b.weight_g, b.price_eur, b.status, backfilledFlag(b), b.note, id);
+    .run(b.roast_date, b.opened_at, b.weight_g, b.price_eur, b.status, backfilledFlag(b), JSON.stringify(list), b.note, id);
   return Number(res.changes) > 0;
+}
+
+/** Ungeöffnete Tüte einfrieren oder auftauen (`date` Standard heute); Fehlertext oder null */
+export function freezeBatch(id: number, on: boolean, date: string | null): string | null {
+  const r = db.prepare(`SELECT status, roast_date, freezes FROM batches WHERE id = ?`).get(id) as Row | undefined;
+  if (!r) return "Charge nicht gefunden";
+  const day = date ?? localToday();
+  if (day > localToday()) return "Datum liegt in der Zukunft";
+  const list = json<Freeze[]>(r.freezes, []);
+  const last = list[list.length - 1];
+  if (on) {
+    if (r.status !== "ungeoeffnet") return "Nur ungeöffnete Tüten einfrieren";
+    if (last && !last.to) return null;
+    if (last?.to && day < last.to) return `Zuletzt aufgetaut am ${last.to}, davor kann sie nicht eingefroren sein`;
+    if (r.roast_date && day < String(r.roast_date)) return "Eingefroren vor dem Röstdatum";
+    list.push({ from: day, to: null });
+  } else {
+    if (!last || last.to) return null;
+    if (day < last.from) return "Aufgetaut vor dem Einfrieren";
+    // am selben Tag wieder raus: kein Aufenthalt, Eintrag weg (auch „Rückgängig“ direkt nach dem Einfrieren)
+    if (day === last.from) list.pop();
+    else last.to = day;
+  }
+  db.prepare(`UPDATE batches SET freezes = ? WHERE id = ?`).run(JSON.stringify(list), id);
+  return null;
 }
 
 export function deleteBatch(id: number): boolean {
@@ -578,6 +624,7 @@ export function brewLog(): BrewLog {
 export function createBrew(b: BrewInput): number | string {
   const err = checkBrewRefs(b);
   if (err) return err;
+  return tx(() => {
   claimGrinderEvent(b.grinder_event_id, null);
   claimMachineShot(b.machine_shot_id, null);
   const res = db
@@ -589,12 +636,16 @@ export function createBrew(b: BrewInput): number | string {
     .run(...brewParams(b));
   touchCoffee(b.coffee_id);
   return Number(res.lastInsertRowid);
+  });
 }
 
 export function updateBrew(id: number, b: BrewInput): boolean | string {
   const err = checkBrewRefs(b);
   if (err) return err;
+  // Erst prüfen: ein gelöschter Bezug darf anderen keinen Mahlvorgang oder Shot wegnehmen
+  if (!db.prepare(`SELECT 1 FROM brews WHERE id = ?`).get(id)) return false;
   const p = brewParams(b);
+  return tx(() => {
   claimGrinderEvent(b.grinder_event_id, id);
   claimMachineShot(b.machine_shot_id, id);
   const res = db
@@ -605,6 +656,7 @@ export function updateBrew(id: number, b: BrewInput): boolean | string {
     )
     .run(...p, id);
   return Number(res.changes) > 0;
+  });
 }
 
 export function deleteBrew(id: number): boolean {
@@ -688,24 +740,29 @@ export function stats(): Stats {
        FROM brews b LEFT JOIN recipes r ON r.id = b.recipe_id
        GROUP BY label ORDER BY count DESC`,
     ),
-    by_month: (
-      db
-        .prepare(
-          `SELECT substr(brewed_at, 1, 7) AS month, COUNT(*) AS brews, AVG(total) AS avg
-           FROM brews GROUP BY month ORDER BY month DESC LIMIT 12`,
-        )
-        .all() as Row[]
-    )
-      .map((r) => ({
-        month: String(r.month),
-        brews: Number(r.brews),
-        avg: r.avg == null ? null : Math.round(Number(r.avg) * 100) / 100,
-      }))
-      .reverse(),
+    by_month: brewsByMonth(),
   };
 }
 
 const r2 = (v: number) => Math.round(v * 100) / 100;
+
+/** Bezüge der letzten 12 Monate mit Bezug, Monat in Ortszeit (ein Bezug am 1. um 0:30 gehört nicht zum Vormonat) */
+function brewsByMonth() {
+  const months = new Map<string, { brews: number; sum: number; n: number }>();
+  for (const r of db.prepare(`SELECT brewed_at, total FROM brews`).all() as Row[]) {
+    const month = localToday(new Date(String(r.brewed_at))).slice(0, 7);
+    if (!/^\d{4}-\d{2}$/.test(month)) continue;
+    const m = months.get(month) ?? { brews: 0, sum: 0, n: 0 };
+    m.brews++;
+    if (r.total != null) (m.sum += Number(r.total)), m.n++;
+    months.set(month, m);
+  }
+  return [...months]
+    .sort((a, b) => b[0].localeCompare(a[0]))
+    .slice(0, 12)
+    .reverse()
+    .map(([month, m]) => ({ month, brews: m.brews, avg: m.n ? r2(m.sum / m.n) : null }));
+}
 
 /**
  * Kosten aus den Chargen: Preis der Charge, Gewicht der Charge (sonst Packungsgröße des Kaffees).

@@ -3,7 +3,7 @@ import { useDrinkWindows } from "../ui/ConfigForm.tsx";
 import {
   Archive,
   ArchiveRestore,
-  Bookmark,
+  Eye,
   ChevronRight,
   Coffee as CoffeeIcon,
   Ellipsis,
@@ -23,7 +23,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { CATEGORY_BY_ID, FLAVOR_BY_ID } from "../../../shared/flavors.ts";
 import { byUrgency, freshness, freshnessLabel } from "../../../shared/freshness.ts";
 import { CUP_KEYS, formatScore, QUALITY_KEYS, SCORE_LABELS, scoreGrade } from "../../../shared/sca.ts";
-import { countryFlag, daysBetween, isSca, pricePerKg, ROAST_FOR, ROAST_LEVELS, TASTE_LABEL, TASTE_TAGS, type Batch, type Brew, type Coffee, type ScaBrew, type TasteTag } from "../../../shared/types.ts";
+import { bagAge, countryFlag, frozenDays, frozenSince, isFrozen, isSca, pricePerKg, ROAST_FOR, ROAST_LEVELS, TASTE_LABEL, TASTE_TAGS, type Batch, type Brew, type Coffee, type ScaBrew, type TasteTag } from "../../../shared/types.ts";
 import { api } from "../api.ts";
 import {
   averageScores,
@@ -59,9 +59,17 @@ const CUP_COLOR = "light-dark(#5B7FA6, #8FB2D6)";
 function batchLabel(b: Batch): string {
   const base = b.roast_date ? `Röstung ${fmtDateShort(b.roast_date)}` : b.status === "leer" ? "Ohne Röstdatum" : `Charge vom ${fmtDateShort(b.created_at)}`;
   if (b.status === "leer") return `${base} · ${b.backfilled ? "nachgetragen" : "aufgebraucht"}`;
-  if (b.status === "ungeoeffnet") return `${base} · ungeöffnet`;
-  const day = daysBetween(b.roast_date, todayIso());
+  if (b.status === "ungeoeffnet") return `${base} · ${isFrozen(b) ? "eingefroren" : "ungeöffnet"}`;
+  const day = bagAge(b, todayIso());
   return day != null ? `${base} · Tag ${day}` : base;
+}
+
+/** Gefrierfach kurz: „eingefroren seit 15.11.“ oder „12 Tage eingefroren“ (zählen nicht zum Alter) */
+function freezeNote(b: Batch): string | null {
+  const since = frozenSince(b);
+  if (since) return `eingefroren seit ${fmtDateShort(since)}`;
+  const n = frozenDays(b.freezes, todayIso());
+  return n > 0 ? `${plural(n, "Tag", "Tage")} eingefroren` : null;
 }
 
 /** Preis, mit €/kg, wenn das Gewicht bekannt ist */
@@ -216,8 +224,8 @@ function BatchRow({
   onPick: () => void;
   onEdit?: () => void;
 }) {
-  const day = b?.status === "offen" ? daysBetween(b.roast_date, todayIso()) : null;
-  const badge = !b ? null : b.status === "leer" ? (b.backfilled ? "Nachgetragen" : "Aufgebraucht") : b.status === "ungeoeffnet" ? "Ungeöffnet" : day != null ? `Tag ${day}` : "Offen";
+  const day = b?.status === "offen" ? bagAge(b, todayIso()) : null;
+  const badge = !b ? null : b.status === "leer" ? (b.backfilled ? "Nachgetragen" : "Aufgebraucht") : b.status === "ungeoeffnet" ? (isFrozen(b) ? "Eingefroren" : "Ungeöffnet") : day != null ? `Tag ${day}` : "Offen";
   // Aufgebrauchte ohne Röstdatum sind nachgetragen: Anlegedatum wäre irreführend, fehlendes Datum kein Mangel
   const head =
     title ??
@@ -226,6 +234,7 @@ function BatchRow({
     sub ??
     [
       b?.opened_at ? `geöffnet ${fmtDateShort(b.opened_at)}` : b?.roast_date || b?.status === "leer" ? null : "Röstdatum fehlt",
+      b ? freezeNote(b) : null,
       b?.weight_g != null ? fmtGrams(b.weight_g) : null,
       b?.price_eur != null ? priceLine(b.price_eur, b.weight_g) : null,
       b ? plural(b.brew_count, "Bezug", "Bezüge") : null,
@@ -381,7 +390,7 @@ export function CoffeeDetail({ id, brewOpen }: { id: number; brewOpen: boolean }
   const starsAll = avgStars(quickAll);
   const best = scaAll.reduce<ScaBrew | null>((m, b) => (!m || b.total > m.total ? b : m), null);
   const recipeName = (rid: number | null) => data.recipes.find((r) => r.id === rid)?.name ?? "Ohne Rezept";
-  const bestDay = best?.batch_id ? daysBetween(batchMap.get(best.batch_id)?.roast_date ?? null, best.brewed_at) : null;
+  const bestDay = best?.batch_id ? (batchMap.get(best.batch_id) ? bagAge(batchMap.get(best.batch_id)!, best.brewed_at) : null) : null;
   const usedRecipes = new Set(data.brews.map((b) => b.recipe_id ?? 0)).size;
 
   // Höhepunkt: Tag mit dem besten Schnitt über alle Bezüge mit Röstdatum
@@ -401,7 +410,7 @@ export function CoffeeDetail({ id, brewOpen }: { id: number; brewOpen: boolean }
       .map((b) => ({ b, f: freshness(b, c, today, windows) }))
       .sort((x, y) => byUrgency(x.f, y.f))[0]?.b ?? null;
   const refBatch = openBatch ?? nextSealed;
-  const refDay = refBatch ? daysBetween(refBatch.roast_date, today) : null;
+  const refDay = refBatch ? bagAge(refBatch, today) : null;
   const refFresh = refBatch ? freshness(refBatch, c, today, windows) : null;
   const refSub = !refBatch
     ? "keine offene Charge"
@@ -624,9 +633,9 @@ export function CoffeeDetail({ id, brewOpen }: { id: number; brewOpen: boolean }
   const menu = [
     { label: "Bearbeiten", icon: Pencil, onSelect: () => navigate(`/kaffee/${id}/bearbeiten`) },
     {
-      label: c.wishlist ? "Von der Merkliste nehmen" : "Auf die Merkliste",
-      icon: Bookmark,
-      onSelect: () => void patch({ wishlist: !c.wishlist }, c.wishlist ? "Von der Merkliste genommen" : "Auf die Merkliste gesetzt"),
+      label: c.wishlist ? "Aus Gesehen nehmen" : "Unter Gesehen ablegen",
+      icon: Eye,
+      onSelect: () => void patch({ wishlist: !c.wishlist }, c.wishlist ? "Aus Gesehen genommen" : "Unter Gesehen abgelegt"),
     },
     { label: "Shop öffnen", icon: ExternalLink, disabled: !c.url, onSelect: () => window.open(c.url, "_blank", "noopener") },
     {
@@ -644,10 +653,10 @@ export function CoffeeDetail({ id, brewOpen }: { id: number; brewOpen: boolean }
         <BackLink to={lastOrigin().path}>{lastOrigin().label}</BackLink>
         <div className="flex-1" />
         <IconButton
-          label={c.wishlist ? "Von der Merkliste nehmen" : "Auf die Merkliste"}
-          icon={Bookmark}
+          label={c.wishlist ? "Aus Gesehen nehmen" : "Unter Gesehen ablegen"}
+          icon={Eye}
           active={c.wishlist}
-          onClick={() => void patch({ wishlist: !c.wishlist }, c.wishlist ? "Von der Merkliste genommen" : "Auf die Merkliste gesetzt")}
+          onClick={() => void patch({ wishlist: !c.wishlist }, c.wishlist ? "Aus Gesehen genommen" : "Unter Gesehen abgelegt")}
         />
         <Button size="sm" className="max-sm:hidden" onClick={() => navigate(`/kaffee/${id}/bearbeiten`)}>
           Bearbeiten
@@ -666,8 +675,8 @@ export function CoffeeDetail({ id, brewOpen }: { id: number; brewOpen: boolean }
           </Banner>
         )}
         {c.wishlist && !c.archived && (
-          <Banner tone="info" icon={Bookmark} action={<Button size="sm" onClick={() => setBatchSheet({ batch: null })}>Gekauft</Button>}>
-            Auf der Merkliste. Mit der ersten Charge zieht er in die Bibliothek um.
+          <Banner tone="info" icon={Eye} action={<Button size="sm" onClick={() => setBatchSheet({ batch: null })}>Gekauft</Button>}>
+            Unter Gesehen. Mit der ersten Charge zieht er in die Bibliothek um.
           </Banner>
         )}
 
@@ -774,6 +783,7 @@ export function CoffeeDetail({ id, brewOpen }: { id: number; brewOpen: boolean }
             const info = [
               b.roast_date ? `Geröstet ${fmtDate(b.roast_date)}` : b.status === "leer" ? null : "Röstdatum fehlt",
               b.opened_at ? `geöffnet ${fmtDateShort(b.opened_at)}` : null,
+              freezeNote(b),
               b.weight_g != null ? fmtGrams(b.weight_g) : null,
               b.price_eur != null ? priceLine(b.price_eur, b.weight_g) : null,
               plural(b.brew_count, "Bezug", "Bezüge"),

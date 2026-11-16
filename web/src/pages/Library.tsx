@@ -1,8 +1,8 @@
 import { useQuery } from "@tanstack/react-query";
-import { ArrowDownUp, Bookmark, ChevronDown, ChevronRight, Coffee, LayoutGrid, List, Plus, SearchX, X } from "lucide-react";
+import { ArrowDownUp, Eye, ChevronDown, ChevronRight, Coffee, LayoutGrid, List, Plus, SearchX, X } from "lucide-react";
 import { useMemo, useRef, useState, type DragEvent } from "react";
 import { CATEGORY_BY_ID } from "../../../shared/flavors.ts";
-import { countryFlag, daysBetween, ROAST_FOR, ROAST_LEVELS, type CoffeeListItem } from "../../../shared/types.ts";
+import { bagAge, countryFlag, ROAST_FOR, ROAST_LEVELS, type CoffeeListItem } from "../../../shared/types.ts";
 import { formatScore } from "../../../shared/sca.ts";
 import { api } from "../api.ts";
 import { todayIso } from "../lib/format.ts";
@@ -31,7 +31,7 @@ import { fmtStars } from "../ui/Stars.tsx";
 const TITLES: Record<LibraryView, string> = {
   alle: "Alle Kaffees",
   offen: "Gerade offen",
-  merkliste: "Merkliste",
+  gesehen: "Gesehen",
   aufgebraucht: "Aufgebraucht",
   archiv: "Archiv",
 };
@@ -150,7 +150,7 @@ function ActiveFilters({ f }: { f: Filters }) {
 function GridItem({ c }: { c: CoffeeListItem }) {
   const roast = roastLabel(c);
   const origin = originLine(c);
-  const day = c.open_batch ? daysBetween(c.open_batch.roast_date, todayIso()) : null;
+  const day = c.open_batch ? bagAge(c.open_batch, todayIso()) : null;
   // Wo der Kaffee gerade steht: offen (mit Tag seit Röstung, wenn bekannt) oder ungeöffnet im Lager; Aufgebrauchtes bleibt ohne Zusatz
   const state = c.status === "offen" ? (day != null ? `Offen · Tag ${day}` : "Offen") : c.status === "vorrat" ? "Ungeöffnet" : null;
   return (
@@ -162,7 +162,7 @@ function GridItem({ c }: { c: CoffeeListItem }) {
         <ScoreCapsule score={c.best_score} stars={c.avg_rating} className="absolute top-2.5 right-2.5" />
         {c.wishlist && (
           <span className="absolute top-2.5 left-2.5 flex size-7 items-center justify-center rounded-full bg-card shadow-card">
-            <Bookmark size={13} strokeWidth={2.4} className="text-accent" aria-label="Auf der Merkliste" />
+            <Eye size={13} strokeWidth={2.4} className="text-accent" aria-label="Gesehen" />
           </span>
         )}
       </Artwork>
@@ -250,7 +250,7 @@ export function Library({ view }: { view: LibraryView }) {
   const base = useMemo(() => (coffees ?? []).filter((c) => inView(c, view)), [coffees, view]);
   const shown = useMemo(() => sortCoffees(applyFilters(base, f), f.sort), [base, f]);
   const openCount = (coffees ?? []).filter((c) => inView(c, "offen")).length;
-  const wishlistView = view === "merkliste";
+  const wishlistView = view === "gesehen";
   const { drag, handlers } = usePageDrop(wishlistView);
   const add = () => {
     setPendingAdd({ wishlist: wishlistView });
@@ -307,7 +307,7 @@ export function Library({ view }: { view: LibraryView }) {
       {drag && (
         <div className="pointer-events-none absolute inset-3 z-20 flex items-start justify-center rounded-[20px] border-2 border-dashed border-accent bg-[color-mix(in_srgb,var(--c-accent-soft)_80%,transparent)] pt-[30vh]">
           <span className="rounded-[12px] bg-card px-4 py-2.5 text-[15px] font-bold text-accent shadow-card">
-            Loslassen, um {wishlistView ? "ihn auf die Merkliste zu setzen" : "den Kaffee hinzuzufügen"}
+            Loslassen, um {wishlistView ? "ihn unter Gesehen abzulegen" : "den Kaffee hinzuzufügen"}
           </span>
         </div>
       )}
@@ -322,14 +322,14 @@ export function Library({ view }: { view: LibraryView }) {
             <SkeletonGrid />
           ) : !coffees ? null : base.length === 0 ? (
             <EmptyState
-              icon={view === "merkliste" ? Bookmark : Coffee}
+              icon={view === "gesehen" ? Eye : Coffee}
               title={
                 view === "alle"
                   ? coffees.length === 0
                     ? "Noch keine Kaffees"
-                    : "Alles auf der Merkliste oder im Archiv"
-                  : view === "merkliste"
-                    ? "Merkliste ist leer"
+                    : "Alles unter Gesehen oder im Archiv"
+                  : view === "gesehen"
+                    ? "Noch nichts gesehen"
                     : view === "offen"
                       ? "Gerade ist nichts offen"
                       : view === "aufgebraucht"
@@ -339,16 +339,16 @@ export function Library({ view }: { view: LibraryView }) {
               text={
                 view === "alle" && coffees.length === 0
                   ? "Per Link, Name oder Foto der Packung. Du kannst ein Bild oder einen Link auch einfach hierher ziehen."
-                  : view === "merkliste"
-                    ? "Kaffees, die du probieren willst, landen hier. Mit der ersten Charge wandern sie in die Bibliothek."
+                  : view === "gesehen"
+                    ? "Kaffees, die dir irgendwo begegnet sind, legst du hier ab. Mit der ersten Charge wandern sie in die Bibliothek."
                     : view === "offen"
                       ? "Sobald eine Charge geöffnet ist, erscheint der Kaffee hier."
                       : undefined
               }
               action={
-                (view === "alle" && coffees.length === 0) || view === "merkliste" ? (
+                (view === "alle" && coffees.length === 0) || view === "gesehen" ? (
                   <Button variant="primary" icon={Plus} onClick={add}>
-                    {view === "merkliste" ? "Kaffee merken" : "Kaffee hinzufügen"}
+                    {view === "gesehen" ? "Kaffee ablegen" : "Kaffee hinzufügen"}
                   </Button>
                 ) : undefined
               }

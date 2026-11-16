@@ -1,18 +1,23 @@
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useDrinkWindows } from "../ui/ConfigForm.tsx";
-import { ArrowRight, Package } from "lucide-react";
+import { ArrowRight, Package, Snowflake, Sun } from "lucide-react";
 import { type ReactNode, useState } from "react";
-import { addDays, byUrgency, DRINK_WINDOWS, freshness, freshnessLabel, isSoon, type Freshness } from "../../../shared/freshness.ts";
-import { ROAST_FOR, ROAST_LEVELS, type RoastLevel, type StockItem } from "../../../shared/types.ts";
+import { byUrgency, DRINK_WINDOWS, freshness, freshnessLabel, isSoon, thawTime, type Freshness } from "../../../shared/freshness.ts";
+import { frozenSince, ROAST_FOR, ROAST_LEVELS, type RoastLevel, type StockItem } from "../../../shared/types.ts";
 import { api } from "../api.ts";
 import { fmtDateShort, plural, todayIso } from "../lib/format.ts";
 import { href } from "../lib/router.ts";
 import { Artwork } from "../ui/Artwork.tsx";
 import { CoffeeLink } from "../ui/CoffeeLink.tsx";
-import { cx, EmptyState, LoadError, SectionTitle, Segmented, Spinner } from "../ui/controls.tsx";
+import { Button, cx, EmptyState, LoadError, SectionTitle, Segmented, Spinner } from "../ui/controls.tsx";
+import { toast } from "../ui/overlay.tsx";
 import { LargeTitle, Page, Toolbar } from "../ui/Shell.tsx";
 
-type Entry = StockItem & { f: Freshness };
+type Entry = StockItem & {
+  f: Freshness;
+  /** zum Einfrieren empfohlen: eine Tüte über die nächste hinaus im Vorrat */
+  freeze?: boolean;
+};
 
 /** Erste Packung, die zu öffnen ist: trinkbereit und am dringendsten, sonst die, die als Erste trinkbereit wird; nur bewertbare */
 function nextToOpen(sealed: Entry[]): Entry | null {
@@ -24,6 +29,7 @@ function nextToOpen(sealed: Entry[]): Entry | null {
 }
 
 function tone(f: Freshness): string {
+  if (f.state !== "unbekannt" && f.frozenNow) return "bg-cold-soft text-cold";
   if (f.state === "flach") return "bg-bad-soft text-bad";
   if (isSoon(f)) return "bg-star/15 text-ink";
   return { ruht: "bg-fill text-ink2", hoch: "bg-good-soft text-good", spaet: "bg-fill text-ink", unbekannt: "bg-fill text-ink3" }[f.state];
@@ -36,8 +42,14 @@ function statusLine(e: Entry): string {
     const list = m.length > 1 ? `${m.slice(0, -1).join(", ")} und ${m[m.length - 1]}` : m[0];
     return `${list} ${m.length > 1 ? "fehlen" : "fehlt"}, darum keine Bewertung. Am Kaffee nachtragen.`;
   }
-  const at = (d: number) => fmtDateShort(addDays(e.roast_date!, d));
+  const at = (d: number) => fmtDateShort(f.dateOf(d));
   const left = f.end - f.day;
+  if (f.frozenNow) {
+    const since = frozenSince(e);
+    const thawed = f.day < f.ready ? `trinkbereit ab ${at(f.ready)}` : f.day <= f.peak ? `bestes Fenster bis ${at(f.peak)}` : `gut bis ${at(f.end)}`;
+    // Daten enden schon auf einen Punkt, keinen zweiten setzen
+    return `Eingefroren${since ? ` seit ${fmtDateShort(since)}` : ""}, steht bei Tag ${f.day}. Heute aufgetaut: ${thawed}${f.day <= f.peak ? `, gut bis ${at(f.end)}` : ""}`;
+  }
   switch (f.state) {
     case "ruht":
       return `Trinkbereit ab ${at(f.ready)}, gut bis ${at(f.end)}`;
@@ -54,25 +66,34 @@ export function StockPage() {
   const { data, isLoading, error, refetch } = useQuery({ queryKey: ["coffees", "stock"], queryFn: api.stock });
   const windows = useDrinkWindows();
   const today = todayIso();
-  const entries: Entry[] = (data ?? [])
-    .map((b) => ({ ...b, f: freshness(b, b.coffee, today, windows) }))
-    .sort((a, b) => byUrgency(a.f, b.f));
-  const next = nextToOpen(entries);
+  const all: Entry[] = (data ?? []).map((b) => ({ ...b, f: freshness(b, b.coffee, today, windows) })).sort((a, b) => byUrgency(a.f, b.f));
+  const frozen = all.filter((e) => e.f.state !== "unbekannt" && e.f.frozenNow);
+  const sealed = all.filter((e) => !frozen.includes(e));
+  const next = nextToOpen(sealed);
+  // Eine Tüte im Vorrat reicht: alles darüber hinaus besser einfrieren (ohne bewertbare Nächste bleibt die erste der Liste)
+  const keep = next ?? sealed[0];
+  const entries: Entry[] = sealed.map((e) => ({ ...e, freeze: e.id !== keep?.id }));
   const late = entries.filter((e) => isSoon(e.f)).length;
   const unrated = entries.filter((e) => e.f.state === "unbekannt").length;
+  const toFreeze = entries.filter((e) => e.freeze).length;
+
+  const sub = all.length
+    ? [
+        plural(all.length, "ungeöffnete Packung", "ungeöffnete Packungen"),
+        frozen.length ? `${frozen.length} davon eingefroren` : null,
+        late ? `${late} ${late === 1 ? "sollte" : "sollten"} bald weg` : null,
+        toFreeze ? `${toFreeze} zum Einfrieren empfohlen` : null,
+        unrated ? `${unrated} nicht bewertbar` : null,
+      ]
+        .filter(Boolean)
+        .join(", ") + "."
+    : "Ungeöffnete Packungen nach Trinkfenster";
 
   return (
     <>
       <Toolbar title="Lager" />
       <Page wide>
-        <LargeTitle
-          lift
-          sub={
-            entries.length
-              ? `${plural(entries.length, "ungeöffnete Packung", "ungeöffnete Packungen")}${late ? `, ${late} ${late === 1 ? "sollte" : "sollten"} bald weg` : ""}${unrated ? `, ${unrated} nicht bewertbar` : ""}. Wer zuerst aus dem besten Fenster fällt, steht oben.`
-              : "Ungeöffnete Packungen nach Trinkfenster"
-          }
-        >
+        <LargeTitle lift sub={sub}>
           Lager
         </LargeTitle>
 
@@ -82,21 +103,32 @@ export function StockPage() {
           </div>
         )}
         {error && <LoadError what="Das Lager wurde" error={error} retry={() => void refetch()} />}
-        {data && !entries.length && (
+        {data && !all.length && (
           <EmptyState icon={Package} title="Nichts im Lager" text="Neue Packungen legst du am Kaffee als Charge an, mit Röstdatum und Status ungeöffnet. Offene Packungen stehen unter „Gerade offen“." />
         )}
 
         {next && <NextCard e={next} more={entries.length - 1} />}
 
         {entries.length > 0 && (
-          <StockSection title="Ungeöffnet" sub="In der Reihenfolge, in der du sie öffnen solltest.">
+          <StockSection
+            title="Ungeöffnet"
+            sub={`In der Reihenfolge, in der du sie öffnen solltest.${toFreeze ? " Eine Packung im Vorrat reicht, die übrigen halten eingefroren ihren Stand." : ""}`}
+          >
             {entries.map((e) => (
               <StockCard key={e.id} e={e} next={e.id === next?.id} />
             ))}
           </StockSection>
         )}
 
-        {entries.length > 0 && <WindowTable />}
+        {frozen.length > 0 && (
+          <StockSection title="Im Gefrierfach" sub="Die Tage im Gefrierfach zählen nicht zum Alter. Zum Auftauen die Tüte geschlossen auf Raumtemperatur kommen lassen.">
+            {frozen.map((e) => (
+              <StockCard key={e.id} e={e} />
+            ))}
+          </StockSection>
+        )}
+
+        {all.length > 0 && <WindowTable />}
       </Page>
     </>
   );
@@ -138,41 +170,98 @@ function NextCard({ e, more }: { e: Entry; more: number }) {
   );
 }
 
+/** Text für den Auftau-Toast: Dauer nach Tütengröße, dazu die Regel gegen Kondenswasser */
+function thawNote(g: number | null): string {
+  const size = g ? `${g} g brauchen` : "Die Tüte braucht";
+  return `${size} etwa ${thawTime(g)} bei Raumtemperatur. Geschlossen lassen, bis sie sich nicht mehr kühl anfühlt, sonst zieht Kondenswasser in die Bohnen.`;
+}
+
 function StockCard({ e, next }: { e: Entry; next?: boolean }) {
+  const qc = useQueryClient();
+  const [busy, setBusy] = useState(false);
+  const frozenNow = e.f.state !== "unbekannt" && e.f.frozenNow;
   // Einzeln unteilbar, damit beim Umbruch der Trennpunkt am Zeilenende bleibt
   const meta = [
     e.roast_date ? `Röstung ${fmtDateShort(e.roast_date)}` : "Ohne Röstdatum",
     e.f.state !== "unbekannt" && `Tag ${e.f.day}`,
+    e.f.state !== "unbekannt" && e.f.frozen > 0 && `${plural(e.f.frozen, "Tag", "Tage")} eingefroren`,
   ].filter((m): m is string => !!m);
+
+  const setFrozen = async (on: boolean) => {
+    setBusy(true);
+    try {
+      await api.freezeBatch(e.id, on);
+      await qc.invalidateQueries({ queryKey: ["coffees"] });
+      const undo = {
+        label: "Rückgängig",
+        onClick: () => void api.freezeBatch(e.id, !on).then(() => qc.invalidateQueries({ queryKey: ["coffees"] })),
+      };
+      if (on) toast(`${e.coffee.name} eingefroren`, "ok", undo);
+      else toast(thawNote(e.weight_g ?? e.coffee.weight_g), "info", undo, { top: true, title: `${e.coffee.name} taut auf`, ms: 15000 });
+    } catch (err) {
+      toast(err instanceof Error ? err.message : "Speichern fehlgeschlagen", "error");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const f = e.freeze;
+  const fr = e.f.state !== "unbekannt" ? e.f : null;
   return (
-    <CoffeeLink
-      id={e.coffee.id}
+    <div
       className={cx(
-        "flex flex-col gap-3.5 rounded-[18px] bg-card p-4 text-ink no-underline shadow-card hover:bg-hover",
+        "flex flex-col overflow-hidden rounded-[18px] bg-card shadow-card",
         next && "ring-2 ring-accent/60",
+        f && "ring-2 ring-cold/50",
       )}
     >
-      <div className="flex items-start gap-3">
-        <Artwork coffee={e.coffee} size="xs" rounded={10} className="size-12 shrink-0" />
-        <div className="flex min-w-0 flex-1 flex-col gap-0.5">
-          {e.coffee.roaster && <span className="truncate text-[11.5px] font-bold tracking-[0.06em] text-ink2 uppercase">{e.coffee.roaster}</span>}
-          <span className="line-clamp-2 text-[16px] leading-snug font-bold">{e.coffee.name}</span>
-          <span className="tnum text-[13px] text-ink2">
-            {meta.map((m, i) => (
-              <span key={i} className="whitespace-nowrap">
-                {m}
-                {i < meta.length - 1 ? " · " : ""}
-              </span>
-            ))}
+      <CoffeeLink id={e.coffee.id} className="flex flex-1 flex-col gap-3.5 p-4 text-ink no-underline hover:bg-hover">
+        <div className="flex items-start gap-3">
+          <Artwork coffee={e.coffee} size="xs" rounded={10} className="size-12 shrink-0" />
+          <div className="flex min-w-0 flex-1 flex-col gap-0.5">
+            {e.coffee.roaster && <span className="truncate text-[11.5px] font-bold tracking-[0.06em] text-ink2 uppercase">{e.coffee.roaster}</span>}
+            <span className="line-clamp-2 text-[16px] leading-snug font-bold">{e.coffee.name}</span>
+            <span className="tnum text-[13px] text-ink2">
+              {meta.map((m, i) => (
+                <span key={i} className="whitespace-nowrap">
+                  {m}
+                  {i < meta.length - 1 ? " · " : ""}
+                </span>
+              ))}
+            </span>
+          </div>
+          <Pill f={e.f} />
+        </div>
+        {fr && <WindowBar f={fr} />}
+        <span className="text-[13px] leading-snug text-ink2">{statusLine(e)}</span>
+      </CoffeeLink>
+      {f && (
+        <div className="flex flex-col gap-1 border-t border-line bg-cold-soft px-4 py-3 text-[13px] leading-snug">
+          <span className="flex items-center gap-1.5 font-extrabold text-cold">
+            <Snowflake size={14} strokeWidth={2.4} />
+            Einfrieren empfohlen
+          </span>
+          <span className="text-ink2">
+            {fr?.state === "ruht"
+              ? `Vor ihr ist schon eine Packung dran. Am besten nach der Ruhezeit einfrieren (ab ${fmtDateShort(fr.dateOf(fr.ready))}), dann hält sie ihr bestes Fenster.`
+              : `Vor ihr ist schon eine Packung dran. Eingefroren altert sie nicht${fr ? ` und bleibt bei Tag ${fr.day}` : ""}, bis du sie brauchst.`}
           </span>
         </div>
-        <Pill f={e.f} />
-      </div>
-      {e.f.state !== "unbekannt" && <WindowBar f={e.f} />}
-      <span className="text-[13px] leading-snug text-ink2">
-        {statusLine(e)}
-      </span>
-    </CoffeeLink>
+      )}
+      {e.status === "ungeoeffnet" && (
+        <div className="flex items-center justify-end gap-2 border-t border-line px-3 py-2">
+          {frozenNow ? (
+            <Button size="sm" icon={Sun} loading={busy} onClick={() => void setFrozen(false)}>
+              Heute aufgetaut
+            </Button>
+          ) : (
+            <Button size="sm" variant={f ? "primary" : "plain"} icon={Snowflake} loading={busy} onClick={() => void setFrozen(true)}>
+              Heute eingefroren
+            </Button>
+          )}
+        </div>
+      )}
+    </div>
   );
 }
 

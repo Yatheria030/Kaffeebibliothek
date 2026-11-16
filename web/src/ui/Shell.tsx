@@ -1,7 +1,7 @@
 import { useQuery } from "@tanstack/react-query";
 import {
   Archive,
-  Bookmark,
+  Eye,
   ChartColumn,
   Check,
   ChevronDown,
@@ -144,7 +144,7 @@ export function LargeTitle({ children, sub, lift }: { children: ReactNode; sub?:
 const NAV: { view: LibraryView; label: string; icon: LucideIcon }[] = [
   { view: "alle", label: "Alle Kaffees", icon: LayoutGrid },
   { view: "offen", label: "Gerade offen", icon: Coffee },
-  { view: "merkliste", label: "Merkliste", icon: Bookmark },
+  { view: "gesehen", label: "Gesehen", icon: Eye },
   { view: "aufgebraucht", label: "Aufgebraucht", icon: PackageOpen },
   { view: "archiv", label: "Archiv", icon: Archive },
 ];
@@ -254,7 +254,7 @@ export function Sidebar({ route, onNavigate }: { route: Route; onNavigate?: () =
   }, [fixed]);
 
   const counts = useMemo(() => {
-    const c: Record<LibraryView, number> = { alle: 0, offen: 0, merkliste: 0, aufgebraucht: 0, archiv: 0 };
+    const c: Record<LibraryView, number> = { alle: 0, offen: 0, gesehen: 0, aufgebraucht: 0, archiv: 0 };
     for (const x of coffees) for (const v of NAV) if (inView(x, v.view)) c[v.view] += 1;
     return c;
   }, [coffees]);
@@ -344,8 +344,8 @@ export function Sidebar({ route, onNavigate }: { route: Route; onNavigate?: () =
 
       <div className="flex flex-col gap-px">
         <SideHeading>Bibliothek</SideHeading>
-        {/* Nach Priorität: jetzt (offen), Vorrat (Lager), Vergangenes (aufgebraucht), Wünsche (Merkliste), selten (Archiv) */}
-        {(["alle", "offen", "lager", "aufgebraucht", "merkliste", "archiv"] as const).map((v) => {
+        {/* Nach Priorität: jetzt (offen), Vorrat (Lager), Vergangenes (aufgebraucht), Gesehenes, selten (Archiv) */}
+        {(["alle", "offen", "lager", "aufgebraucht", "gesehen", "archiv"] as const).map((v) => {
           if (v === "lager")
             return <SideLink key={v} to="/lager" icon={Package} label="Lager" count={stock.length} active={route.name === "stock"} onNavigate={onNavigate} />;
           const n = NAV.find((x) => x.view === v)!;

@@ -8,6 +8,7 @@ import { fmtDateShort, fmtDateTime, fmtRelative } from "../lib/format.ts";
 import { Button, cx, Spinner } from "./controls.tsx";
 import { CoffeeLink } from "./CoffeeLink.tsx";
 import { fmtG } from "./DialIn.tsx";
+import { fmtSec, tenth } from "../../../shared/shot.ts";
 import { Group, Row } from "./form.tsx";
 import { confirmDialog, toast } from "./overlay.tsx";
 
@@ -17,8 +18,8 @@ const at = (iso: string) => hm.format(new Date(iso));
 /** Uhrzeit, an anderen Tagen mit Datum */
 export const when = (iso: string) => (new Date(iso).toDateString() === new Date().toDateString() ? `${at(iso)} Uhr` : fmtDateTime(iso));
 
-/** Mahlgrad wie im Bezug (ganze µm, ohne Tausenderpunkt) */
-export const eventGrind = (e: GrinderEvent) => (e.grind_um == null ? null : fmtG(Math.round(e.grind_um)));
+/** Mahlgrad wie im Bezug (µm auf Zehntel wie gemessen, ohne Tausenderpunkt; das Display der Mühle schneidet ab) */
+export const eventGrind = (e: GrinderEvent) => (e.grind_um == null ? null : fmtG(tenth(e.grind_um)));
 
 export function useGrinderEvents(enabled: boolean, q: { since?: string; around?: string; hours?: number }) {
   return useQuery({
@@ -319,7 +320,7 @@ function eventLine(e: GrinderEvent): string {
     e.grind_um != null ? `${eventGrind(e)} µm` : null,
     e.dose_g != null ? `${n1.format(e.dose_g)} g` : null,
     e.yield_g != null ? `→ ${n1.format(e.yield_g)} g` : null,
-    e.shot_s != null ? `${Math.round(e.shot_s)} s` : null,
+    e.shot_s != null ? `${fmtSec(e.shot_s)} s` : null,
   ]
     .filter(Boolean)
     .join(" · ");
@@ -406,11 +407,11 @@ export function GrinderCard({
             </div>
             <div className="grid grid-cols-2 gap-px border-t border-sep bg-sep @lg:grid-cols-4">
               <Stat label="Mahlgrad" value={sel.grind_um != null ? eventGrind(sel)! : "–"} unit={sel.grind_um != null ? "µm" : undefined}
-                sub={sel.grind_target_um != null && Math.round(sel.grind_target_um) !== Math.round(sel.grind_um ?? -1) ? `Rezept ${fmtG(Math.round(sel.grind_target_um))} µm` : null} />
+                sub={sel.grind_target_um != null && tenth(sel.grind_target_um) !== tenth(sel.grind_um ?? -1) ? `Rezept ${fmtG(tenth(sel.grind_target_um))} µm` : null} />
               <Stat label="Dosis" value={sel.dose_g != null ? n1.format(sel.dose_g) : "–"} unit={sel.dose_g != null ? "g" : undefined}
                 sub={sel.dose_target_g != null ? `Ziel ${n1.format(sel.dose_target_g)} g${sel.grind_s != null ? ` · ${n1.format(sel.grind_s)} s gemahlen` : ""}` : null} />
-              <Stat label="Zeit" value={sel.shot_s != null ? String(Math.round(sel.shot_s)) : "–"} unit={sel.shot_s != null ? "s" : undefined}
-                sub={sel.brew_time_target_s != null ? `Ziel ${Math.round(sel.brew_time_target_s)} s` : sel.shot_s == null ? "ohne Waage/Zeiteingabe" : null} />
+              <Stat label="Zeit" value={sel.shot_s != null ? fmtSec(sel.shot_s) : "–"} unit={sel.shot_s != null ? "s" : undefined}
+                sub={sel.brew_time_target_s != null ? `Ziel ${fmtSec(sel.brew_time_target_s)} s` : sel.shot_s == null ? "ohne Waage/Zeiteingabe" : null} />
               <Stat label="Ausbeute" value={sel.yield_g != null ? n1.format(sel.yield_g) : "–"} unit={sel.yield_g != null ? "g" : undefined}
                 sub={sel.yield_g != null && sel.dose_g ? `1:${n1.format(sel.yield_g / sel.dose_g)}` : null} />
             </div>

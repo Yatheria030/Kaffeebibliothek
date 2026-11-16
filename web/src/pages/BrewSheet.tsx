@@ -22,7 +22,7 @@ import {
 import { brewRatio, grindNumber, isGoodBrew, methodKey } from "../../../shared/grind.ts";
 import {
   BREW_METHODS,
-  daysBetween,
+  bagAge,
   isSca,
   RATING_LABELS,
   TASTE_LABEL,
@@ -35,9 +35,9 @@ import {
   type TasteTag,
 } from "../../../shared/types.ts";
 import { api } from "../api.ts";
-import { brewMethod, espressoHint, lastGoodGrind, tipGrind } from "../lib/dialin.ts";
+import { brewMethod, espressoHint, lastGoodGrind, learnedK, nextShot } from "../lib/dialin.ts";
 import { fmtDateShort, fromLocalDateTime, localDateTime } from "../lib/format.ts";
-import { fmtShotTime, mid, yieldOf } from "../../../shared/shot.ts";
+import { fmtShotTime, mid, tenth, yieldOf } from "../../../shared/shot.ts";
 import { ShotPanel } from "../ui/ShotPanel.tsx";
 import { useShotTarget } from "../ui/ShotTarget.tsx";
 import { Button, cx, Segmented, Stepper } from "../ui/controls.tsx";
@@ -97,7 +97,7 @@ function withEvent(p: Params, e: GrinderEvent | null): Params {
     dose_g: dose,
     grind: eventGrind(e) ?? p.grind,
     water_g: e.yield_g != null && dose && e.yield_g / dose <= 5 ? e.yield_g : p.water_g,
-    time_s: e.shot_s != null ? Math.round(e.shot_s) : p.time_s,
+    time_s: e.shot_s != null ? tenth(e.shot_s) : p.time_s,
   };
 }
 /** Werte eines Decent-Shots darüber: Preinfusion und Bezugszeit getrennt, Temperatur, Ausbeute (nur espressoartig); Dosis nur, wenn sie fehlt (in der de1app oft veraltet) */
@@ -109,8 +109,8 @@ function withShot(p: Params, s: MachineShot | null): Params {
     dose_g: dose,
     water_g: s.yield_g != null && dose && s.yield_g / dose <= 5 ? s.yield_g : p.water_g,
     temp_c: s.temp_c ?? p.temp_c,
-    time_s: s.time_s != null ? Math.round(s.time_s - (s.preinfusion_s ?? 0)) : p.time_s,
-    preinfusion_s: s.preinfusion_s != null ? Math.round(s.preinfusion_s) : p.preinfusion_s,
+    time_s: s.time_s != null ? tenth(s.time_s - (s.preinfusion_s ?? 0)) : p.time_s,
+    preinfusion_s: s.preinfusion_s != null ? tenth(s.preinfusion_s) : p.preinfusion_s,
   };
 }
 /** Mahlvorgang, der beim Öffnen eines neuen Bezugs noch als „gerade eben“ gilt */
@@ -179,13 +179,16 @@ function BrewSheetBody({ onClose, detail, brew, preset }: { onClose: () => void;
   const [newMethod, setNewMethod] = useState<string>(pre?.method ?? (coffee.roast_for === "espresso" ? "Espresso" : "V60"));
   const [brewedAt, setBrewedAt] = useState(localDateTime(brew?.brewed_at));
   const src = brew ?? lastBrew;
+  // Die Zeit ist ein Ergebnis, kein Parameter: neu nur die des Rezepts (wie bei der Rezeptwahl), nie die des letzten Bezugs.
+  // Sonst landet sie ungeprüft im Bezug und das Mahlgrad-Modell lernt aus einer Zeit, die es nie gab
+  const initialTime = brew ? brew.time_s : typeof initialRecipe === "number" ? (allRecipes.find((r) => r.id === initialRecipe)?.time_s ?? null) : null;
   const [p, setP] = useState<Params>(
     pre?.p ?? {
       dose_g: src?.dose_g ?? null,
       water_g: src?.water_g ?? null,
       temp_c: src?.temp_c ?? null,
       grind: src?.grind ?? "",
-      time_s: src?.time_s ?? null,
+      time_s: initialTime,
       preinfusion_s: brew?.preinfusion_s ?? null,
     },
   );
@@ -226,11 +229,13 @@ function BrewSheetBody({ onClose, detail, brew, preset }: { onClose: () => void;
     if (e.grind_um != null) grindTouched.current = true;
     setBrewedAt(localDateTime(shot?.shot_at ?? e.brewed_at ?? e.ground_at));
   };
+  // Rückgängig nimmt nur die Werte der Mühle weg: ein weiter verknüpfter Shot gilt danach wieder (der Stand davor kann ohne ihn sein)
   const undoEvent = () => {
     const b = beforeEvent.current;
     if (b) {
-      setP(b.p);
-      setBrewedAt(b.brewedAt);
+      const s = shotOf(shotId);
+      setP(withShot(b.p, s));
+      setBrewedAt(s ? localDateTime(s.shot_at) : b.brewedAt);
       grindTouched.current = b.touched;
     }
     beforeEvent.current = null;
@@ -258,11 +263,13 @@ function BrewSheetBody({ onClose, detail, brew, preset }: { onClose: () => void;
     setP((cur) => withShot(cur, s));
     setBrewedAt(localDateTime(s.shot_at));
   };
+  // wie bei der Mühle: ein weiter verknüpfter Mahlvorgang bleibt
   const undoShot = () => {
     const b = beforeShot.current;
     if (b) {
-      setP(b.p);
-      setBrewedAt(b.brewedAt);
+      const e = eventOf(eventId);
+      setP(withEvent(b.p, e));
+      setBrewedAt(e ? localDateTime(e.brewed_at ?? e.ground_at) : b.brewedAt);
     }
     beforeShot.current = null;
     shotAutoOff.current = true;
@@ -333,17 +340,47 @@ function BrewSheetBody({ onClose, detail, brew, preset }: { onClose: () => void;
   const target = useShotTarget(coffee);
   const grindQ = useGrindPrediction({ coffee_id: coffee.id, batch_id: batchId, method, grinder: recipe?.grinder ?? "" }, !brew || profile != null);
   const pred = grindQ.data?.prediction ?? null;
-  const hint = espresso && !brew ? espressoHint(lastBag, target, pred?.k ?? null, profile) : null;
-  // Tipp auch nach einem gelungenen Shot, wenn er nicht im Zeitziel lag
-  const tip = !brew && lastBag ? tipGrind(hint, lastBag, profile) : null;
+  const k = learnedK(pred);
+  const hint = espresso && !brew ? espressoHint(lastBag, target, k, profile) : null;
+  // Tipp wie „Nächster Shot“ am Kaffee: Zeit über k zur Fenstermitte, im Fenster zuerst der Geschmack (k erst abwarten)
+  const kReady = grindQ.data !== undefined || grindQ.isError || grindQ.fetchStatus === "idle";
+  const next = espresso && !brew && kReady ? nextShot(bagBrews, hint, target, k, profile) : null;
+  // Shot-Analyse: derselbe „Nächste Shot“, mit eingetragener Zeit vom gerade bewerteten Shot aus (Geschmack, Ausbeute, Preinfusion zählen mit)
+  const nowBrew: Brew | null =
+    espresso && p.time_s != null
+      ? ({
+          ...(brew ?? lastBag ?? {}),
+          id: -1,
+          batch_id: batchId,
+          brewed_at: brew?.brewed_at ?? new Date().toISOString(),
+          dose_g: p.dose_g,
+          water_g: p.water_g,
+          temp_c: p.temp_c,
+          grind: p.grind,
+          time_s: p.time_s,
+          preinfusion_s: p.preinfusion_s ?? null,
+          kind,
+          rating,
+          total: kind === "sca" ? total : null,
+          taste,
+        } as Brew)
+      : null;
+  const shotNext = nowBrew && kReady ? nextShot([nowBrew, ...bagBrews], espressoHint(nowBrew, target, k, profile), target, k, profile) : next;
+  // auch bei „Bleib dabei“ der Mahlgrad des letzten Shots, nicht ein älterer guter: sonst widerspricht der Dialog der Karte
+  const tip = next?.value ?? null;
   const template = grindQ.data?.template ?? null;
   const unit = profile?.unit ?? "";
-  // Vorschlag, in dieser Reihenfolge: Tipp aus dem letzten (nicht gelungenen) Shot, letzter gelungener Mahlgrad der Tüte,
+  // Vorschlag, in dieser Reihenfolge: Nächster Shot aus dem letzten Shot der Tüte (Espresso), letzter gelungener Mahlgrad der Tüte,
   // für eine frische Tüte der Startwert (Mahlkompass, mit Daten plus deine Abweichung)
   const suggestion: { grind: string; label: string } | null = brew
     ? null
     : tip != null
-      ? { grind: fmtG(tip), label: `Tipp aus dem letzten Shot (${hint?.title.toLowerCase()})` }
+      ? {
+          grind: fmtG(tip),
+          label: next?.stay
+            ? `Wie der letzte Shot (${hint?.title.toLowerCase() ?? "im Zeitfenster"})`
+            : `Tipp aus dem letzten Shot (${next?.why === "zeit" ? "zur Fenstermitte" : hint?.title.toLowerCase()})`,
+        }
       : good
         ? { grind: good.grind, label: `Letzter guter Mahlgrad dieser Tüte (${fmtDateShort(good.brewed_at)})` }
         : pred && (freshBag || batchId == null)
@@ -399,7 +436,9 @@ function BrewSheetBody({ onClose, detail, brew, preset }: { onClose: () => void;
       setFromRoaster(r.fromRoaster);
       setNewName(r.name);
       setNewMethod(r.method);
-      setP(withShot(withEvent(r.p, eventOf(eventId)), shotOf(shotId)));
+      // wie bei eigenen Rezepten: Preinfusion bleibt, der vorgeschlagene Mahlgrad gilt, solange keiner von Hand gesetzt ist
+      const grind = suggestion && !grindTouched.current ? suggestion.grind : r.p.grind;
+      setP(withShot(withEvent({ ...r.p, grind, preinfusion_s: p.preinfusion_s }, eventOf(eventId)), shotOf(shotId)));
       return;
     }
     if (v === "new" && fromRoaster != null) setNewName("");
@@ -426,7 +465,7 @@ function BrewSheetBody({ onClose, detail, brew, preset }: { onClose: () => void;
     ...[...detail.batches]
       .sort((a, b) => (b.roast_date ?? b.created_at).localeCompare(a.roast_date ?? a.created_at))
       .map((b) => {
-        const day = daysBetween(b.roast_date, fromLocalDateTime(brewedAt));
+        const day = bagAge(b, fromLocalDateTime(brewedAt));
         return {
           value: b.id,
           label: `${b.roast_date ? `Röstung ${fmtDateShort(b.roast_date)}` : b.status === "leer" ? "Ohne Röstdatum" : `Charge vom ${fmtDateShort(b.created_at)}`}${
@@ -713,11 +752,11 @@ function BrewSheetBody({ onClose, detail, brew, preset }: { onClose: () => void;
           <div className="grid items-start gap-6 @3xl:grid-cols-2 @3xl:gap-4">
             <Group title="Zeit" className="order-1">
               <Row label={espresso ? "Bezugszeit" : "Brühzeit"} htmlFor="bs-time">
-                <TimeField id="bs-time" value={p.time_s} onChange={(v) => setP({ ...p, time_s: v })} />
+                <TimeField id="bs-time" seconds={espresso} value={p.time_s} onChange={(v) => setP({ ...p, time_s: v })} />
               </Row>
               {espresso && (
                 <Row label="Preinfusion" htmlFor="bs-pi">
-                  <TimeField id="bs-pi" value={p.preinfusion_s ?? null} onChange={(v) => setP({ ...p, preinfusion_s: v })} />
+                  <TimeField id="bs-pi" seconds value={p.preinfusion_s ?? null} onChange={(v) => setP({ ...p, preinfusion_s: v })} />
                 </Row>
               )}
             </Group>
@@ -745,7 +784,7 @@ function BrewSheetBody({ onClose, detail, brew, preset }: { onClose: () => void;
             </Group>
             {espresso && (
               <div className="order-2 min-w-0 @3xl:order-3 @3xl:col-span-2">
-                <ShotPanel target={target} p={p} bag={bagBrews} profile={profile} k={pred?.k ?? null} />
+                <ShotPanel target={target} p={p} bag={bagBrews} profile={profile} k={k} next={shotNext} />
               </div>
             )}
           </div>

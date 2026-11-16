@@ -1,4 +1,4 @@
-import { Camera, Check, FileText, Filter, Globe, PenLine, Search, Sparkles, X, type LucideIcon } from "lucide-react";
+import { Camera, Check, FileText, Filter, Globe, Minimize2, PenLine, Search, Sparkles, X, type LucideIcon } from "lucide-react";
 import { useEffect, useState, type ReactNode } from "react";
 import { countryFlag, ROAST_FOR, ROAST_LEVELS, type ScrapePartial, type ScrapeStep } from "../../../shared/types.ts";
 import { fmtCupScore, fmtEuro, hostOf } from "../lib/format.ts";
@@ -257,6 +257,7 @@ export function ScrapeLive({
   photo,
   finished,
   onCancel,
+  onBackground,
 }: {
   what: string;
   started: number;
@@ -266,6 +267,8 @@ export function ScrapeLive({
   photo: string | null;
   finished: boolean;
   onCancel: () => void;
+  /** Seite verlassen, der Auftrag liest im Server weiter */
+  onBackground?: () => void;
 }) {
   const running = steps.filter((s) => s.state === "run").at(-1);
   const writing = steps.some((s) => s.id === "write" && s.state === "run");
@@ -281,21 +284,28 @@ export function ScrapeLive({
 
   return (
     <section className="@container max-w-[1080px] overflow-hidden rounded-[22px] bg-card shadow-card">
-      <header className="flex items-center gap-3.5 border-b border-sep px-5 py-4">
+      <header className="flex flex-wrap items-center gap-x-3.5 gap-y-3 border-b border-sep px-5 py-4">
         <span className="relative flex size-11 shrink-0 items-center justify-center rounded-[14px] bg-accent-soft text-accent">
           {!finished && <span className="anim-ring absolute inset-0 rounded-[14px] border-2 border-accent" aria-hidden="true" />}
           {finished ? <Check key="ok" size={22} strokeWidth={2.6} className="anim-pop" /> : <Sparkles size={22} className="animate-pulse" />}
         </span>
-        <div className="flex min-w-0 flex-1 flex-col gap-0.5">
+        <div className="flex min-w-0 flex-[1_1_12rem] flex-col gap-0.5">
           <span className="line-clamp-2 text-[16px] leading-tight font-extrabold break-words">{finished ? "Fertig ausgelesen" : `Lese ${what} aus`}</span>
           <span key={activity} className="anim-rise truncate text-[13px] text-ink2">
             {activity} · <Elapsed since={started} />
           </span>
         </div>
         {!finished && (
-          <Button size="sm" onClick={onCancel}>
-            Abbrechen
-          </Button>
+          <span className="ml-auto flex shrink-0 flex-wrap justify-end gap-2">
+            {onBackground && (
+              <Button size="sm" variant="primary" icon={Minimize2} onClick={onBackground} title="Liest im Hintergrund weiter, du wirst gemeldet, wenn er fertig ist">
+                Im Hintergrund
+              </Button>
+            )}
+            <Button size="sm" onClick={onCancel}>
+              Abbrechen
+            </Button>
+          </span>
         )}
       </header>
       <div className="grid @2xl:grid-cols-[minmax(0,9fr)_minmax(0,11fr)]">

@@ -102,7 +102,7 @@ export function inView(c: CoffeeListItem, view: LibraryView): boolean {
       return !c.archived && !c.wishlist;
     case "offen":
       return !c.archived && c.status === "offen";
-    case "merkliste":
+    case "gesehen":
       return !c.archived && c.wishlist;
     case "aufgebraucht":
       return !c.archived && c.status === "leer";

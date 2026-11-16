@@ -1,6 +1,6 @@
 import { X } from "lucide-react";
 import { useEffect, useId, useMemo, useRef, useState, type InputHTMLAttributes, type ReactNode } from "react";
-import { numInput, parseNum, parseTime, timeInput } from "../lib/format.ts";
+import { numInput, parseNum, parseSeconds, parseTime, secondsInput, timeInput } from "../lib/format.ts";
 import { cx } from "./controls.tsx";
 
 /** Gruppierte Liste wie in den iOS-/macOS-Einstellungen */
@@ -115,29 +115,44 @@ export function NumField({
   );
 }
 
-export function TimeField({ value, onChange, id, label }: { value: number | null; onChange: (v: number | null) => void; id?: string; label?: string }) {
-  const [text, setText] = useState(timeInput(value));
+/** Zeit als m:ss, mit `seconds` (Espresso) in Sekunden mit Zehnteln wie von Mühle und Maschine: „26,8“ */
+export function TimeField({
+  value,
+  onChange,
+  id,
+  label,
+  seconds,
+}: {
+  value: number | null;
+  onChange: (v: number | null) => void;
+  id?: string;
+  label?: string;
+  seconds?: boolean;
+}) {
+  const parse = seconds ? parseSeconds : parseTime;
+  const show = seconds ? secondsInput : timeInput;
+  const [text, setText] = useState(show(value));
   useEffect(() => {
-    if (parseTime(text) !== value) setText(timeInput(value));
+    if (parse(text) !== value) setText(show(value));
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [value]);
-  const invalid = text.trim() !== "" && parseTime(text) == null;
+  }, [value, seconds]);
+  const invalid = text.trim() !== "" && parse(text) == null;
   return (
     <span className="flex min-w-0 items-center justify-end gap-1">
       <input
         id={id}
         aria-label={label}
         aria-invalid={invalid}
-        inputMode="numeric"
-        placeholder="m:ss"
+        inputMode={seconds ? "decimal" : "numeric"}
+        placeholder={seconds ? "0,0" : "m:ss"}
         value={text}
         onChange={(e) => {
           setText(e.target.value);
-          onChange(parseTime(e.target.value));
+          onChange(parse(e.target.value));
         }}
         className={cx(inputCls, "tnum w-full max-w-[140px] text-right", invalid && "text-bad")}
       />
-      <span className="shrink-0 text-[15px] text-ink3">min</span>
+      <span className="shrink-0 text-[15px] text-ink3">{seconds ? "s" : "min"}</span>
     </span>
   );
 }

@@ -1,12 +1,12 @@
 import { useMemo, useSyncExternalStore } from "react";
 
-export type LibraryView = "alle" | "offen" | "merkliste" | "aufgebraucht" | "archiv";
+export type LibraryView = "alle" | "offen" | "gesehen" | "aufgebraucht" | "archiv";
 
 export type Route =
   | { name: "library"; view: LibraryView }
   | { name: "coffee"; id: number; brew: boolean }
   | { name: "edit"; id: number }
-  | { name: "new" }
+  | { name: "new"; job: string | null }
   | { name: "recipes" }
   | { name: "stats" }
   | { name: "stock" }
@@ -19,7 +19,8 @@ export type Route =
 const VIEWS: Record<string, LibraryView> = {
   "": "alle",
   offen: "offen",
-  merkliste: "merkliste",
+  gesehen: "gesehen",
+  merkliste: "gesehen",
   aufgebraucht: "aufgebraucht",
   archiv: "archiv",
 };
@@ -35,7 +36,7 @@ export function parseRoute(hash: string): Route {
     if (parts[2] === "bearbeiten") return { name: "edit", id };
     return { name: "coffee", id, brew: new URLSearchParams(query).has("bezug") };
   }
-  if (parts[0] === "neu") return { name: "new" };
+  if (parts[0] === "neu") return { name: "new", job: new URLSearchParams(query).get("job") };
   if (parts[0] === "rezepte") return { name: "recipes" };
   if (parts[0] === "statistik") return { name: "stats" };
   if (parts[0] === "lager") return { name: "stock" };

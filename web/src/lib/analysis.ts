@@ -1,7 +1,7 @@
 import { FLAVOR_BY_ID } from "../../../shared/flavors.ts";
 import { CUP_KEYS, defaultScores, QUALITY_KEYS, type Scores } from "../../../shared/sca.ts";
 import { isEspressoMethod } from "../../../shared/grind.ts";
-import { daysBetween, type Batch, type Brew, type Recipe, type ScaBrew } from "../../../shared/types.ts";
+import { bagAge, type Batch, type Brew, type Recipe, type ScaBrew } from "../../../shared/types.ts";
 import { fmtBrewTime, fmtGrams, fmtNum, fmtRatio, fmtTemp, fmtTime } from "./format.ts";
 
 export type BrewGroup = {
@@ -67,7 +67,7 @@ export function xValue(b: Brew, axis: XAxis, batches: Map<number, Batch>): numbe
   switch (axis) {
     case "days": {
       const batch = b.batch_id ? batches.get(b.batch_id) : undefined;
-      return batch ? daysBetween(batch.roast_date, b.brewed_at) : null;
+      return batch ? bagAge(batch, b.brewed_at) : null;
     }
     case "time":
       return b.time_s;

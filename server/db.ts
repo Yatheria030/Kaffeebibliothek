@@ -288,6 +288,20 @@ const migrations: (string | (() => void))[] = [
   },
   // Decent-Profil je Kaffee (`server/decent-profile.ts`): alle Profilvariablen der de1app als JSON
   `ALTER TABLE coffees ADD COLUMN decent_profile TEXT;`,
+  // Gefrierfach je Charge: [{from, to}] in Tagen (YYYY-MM-DD), `to` leer = liegt noch drin; zählt nicht zum Röstalter
+  `ALTER TABLE batches ADD COLUMN freezes TEXT NOT NULL DEFAULT '[]';`,
+  // Startknopf-Vorgänge der Mühle (zeitweise fürs Trinktempo, gleich danach wieder entfernt)
+  `
+  CREATE TABLE grinder_manual (
+    uuid TEXT PRIMARY KEY,
+    ground_at TEXT NOT NULL,
+    grind_s REAL NOT NULL,
+    weight_g REAL
+  );
+  CREATE INDEX grinder_manual_at ON grinder_manual(ground_at);
+  `,
+  // Verbrauchsschätzung wieder entfernt: Einfrieren wird ohne Tempo empfohlen
+  `DROP TABLE grinder_manual;`,
 ];
 
 function migrate() {

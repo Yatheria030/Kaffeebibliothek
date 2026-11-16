@@ -13,7 +13,7 @@ import {
   type GrindSimilar,
 } from "../shared/grind.ts";
 import { mid, normTime, parseShotOverride, parseShotTargets, shotTargetOf, type ResolvedTarget } from "../shared/shot.ts";
-import { daysBetween, ROAST_FOR, type Brew, type RoastFor, type RoastLevel } from "../shared/types.ts";
+import { bagAge, localDay, ROAST_FOR, type Brew, type Freeze, type RoastFor, type RoastLevel } from "../shared/types.ts";
 
 /**
  * Mahlgrad-Prognose für eine neue Tüte. Lernt aus allen gelungenen Bezügen derselben Zubereitung (und Mühle):
@@ -41,6 +41,8 @@ type Bag = {
   name: string;
   roaster: string;
   roast_date: string | null;
+  /** Tage im Gefrierfach zählen nicht zum Röstalter (`bagAge`) */
+  freezes: Freeze[];
   roast_level: RoastLevel | null;
   roast_for: RoastFor | null;
   process: string;
@@ -81,6 +83,7 @@ function bagOf(r: Row): Bag {
     name: String(r.name),
     roaster: String(r.roaster ?? ""),
     roast_date: (r.roast_date as string) ?? null,
+    freezes: parse<Freeze[]>(r.freezes, []),
     roast_level: (r.roast_level as RoastLevel) ?? null,
     roast_for: (r.roast_for as RoastFor) ?? null,
     process: String(r.process ?? ""),
@@ -249,7 +252,7 @@ function bagSimilarity(a: Bag, b: Bag): number {
   return s;
 }
 
-const BAG_SQL = `t.id AS batch_id, c.id AS coffee_id, c.name, c.roaster, t.roast_date, c.roast_level, c.roast_for, c.process, c.process_detail,
+const BAG_SQL = `t.id AS batch_id, c.id AS coffee_id, c.name, c.roaster, t.roast_date, t.freezes, c.roast_level, c.roast_for, c.process, c.process_detail,
   c.country, c.varieties, c.altitude, c.shot_target`;
 
 const compassOf = (p: GrinderProfile, method: string, b: Bag, day: number | null): Compass =>
@@ -278,7 +281,7 @@ function learnK(shots: Shot[], p: GrinderProfile): { k: number; pairs: number } 
   const dir = p.coarserUp ? 1 : -1;
   const byBag = new Map<number, Shot[]>();
   for (const s of shots) byBag.set(s.bag.batch_id, [...(byBag.get(s.bag.batch_id) ?? []), s]);
-  const dayOf = (s: Shot) => Date.parse(s.at.slice(0, 10)) / 86_400_000;
+  const dayOf = (s: Shot) => Date.parse(localDay(s.at)) / 86_400_000;
   let scc = 0;
   let sct = 0;
   let sdd = 0;
@@ -408,7 +411,7 @@ function learnFrom(o: { method: string; grinder: string; setting: string | null;
     const grind = grindNumber(String(r.grind));
     if (grind == null) continue;
     const bag = bagOf(r);
-    const day = daysBetween(bag.roast_date, String(r.brewed_at));
+    const day = bagAge(bag, String(r.brewed_at));
     const t = r.time_s == null ? null : Number(r.time_s);
     if (o.timeMode && t != null && t > 0) {
       const tg = targetOf(r);
@@ -441,7 +444,7 @@ export function predictGrind(opts: { coffee_id: number; batch_id: number | null;
     ? (db.prepare(`SELECT ${BAG_SQL} FROM batches t JOIN coffees c ON c.id = t.coffee_id WHERE t.id = ? AND c.id = ?`).get(opts.batch_id, opts.coffee_id) as
         | Row
         | undefined)
-    : (db.prepare(`SELECT 0 AS batch_id, c.id AS coffee_id, c.name, c.roaster, NULL AS roast_date, c.roast_level, c.roast_for, c.process, c.process_detail,
+    : (db.prepare(`SELECT 0 AS batch_id, c.id AS coffee_id, c.name, c.roaster, NULL AS roast_date, '[]' AS freezes, c.roast_level, c.roast_for, c.process, c.process_detail,
          c.country, c.varieties, c.altitude, c.shot_target FROM coffees c WHERE c.id = ?`).get(opts.coffee_id) as Row | undefined);
   if (!target) return null;
   const tBag = bagOf(target);
@@ -459,7 +462,7 @@ export function predictGrind(opts: { coffee_id: number; batch_id: number | null;
   const taste = timeMode && k != null ? tasteOffset(shots.filter((s) => s.bag.coffee_id === tBag.coffee_id), k, profile!) : null;
   const tasteVal = taste?.taste ?? 0;
 
-  const day = tBag.roast_date ? daysBetween(tBag.roast_date, opts.today) : null;
+  const day = bagAge(tBag, opts.today);
   const comp = profile ? compassOf(profile, opts.method, tBag, day) : null;
   const unit = profile?.unit ?? "";
   const shotInfo = { target: shotTarget, k, k_pairs: learned.kPairs, timed: shots.length, taste: taste?.taste ?? null, taste_n: taste?.n ?? 0 };

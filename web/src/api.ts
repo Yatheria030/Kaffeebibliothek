@@ -18,6 +18,7 @@ import type {
   RoasterRecipe,
   ScrapeDraft,
   ScrapeEvent,
+  ScrapeJob,
   RecommendEvent,
   Recommendations,
   Settings,
@@ -71,7 +72,7 @@ export type CoffeeInput = CoffeeFields & {
   } | null;
 };
 
-export type BatchInput = Pick<Batch, "roast_date" | "opened_at" | "weight_g" | "price_eur" | "status" | "note">;
+export type BatchInput = Pick<Batch, "roast_date" | "opened_at" | "weight_g" | "price_eur" | "status" | "note"> & { freezes?: Batch["freezes"] };
 
 export type RecipeInput = {
   name: string;
@@ -88,6 +89,9 @@ export type RecipeInput = {
 
 export const api = {
   coffees: () => req<CoffeeListItem[]>("GET", "/coffees"),
+  scrapeJobs: () => req<ScrapeJob[]>("GET", "/scrape/jobs"),
+  startScrapeJob: (input: { url?: string; name?: string; image?: string }) => req<ScrapeJob>("POST", "/scrape/jobs", input),
+  removeScrapeJob: (id: string) => req<void>("DELETE", `/scrape/jobs/${encodeURIComponent(id)}`),
   coffee: (id: number) => req<CoffeeDetail>("GET", `/coffees/${id}`),
   createCoffee: (c: CoffeeInput) => req<{ id: number }>("POST", "/coffees", c),
   updateCoffee: (id: number, c: CoffeeInput) => req<{ id: number }>("PUT", `/coffees/${id}`, c),
@@ -99,6 +103,7 @@ export const api = {
 
   createBatch: (coffeeId: number, b: BatchInput) => req<{ id: number }>("POST", `/coffees/${coffeeId}/batches`, b),
   updateBatch: (id: number, b: BatchInput) => req<{ id: number }>("PUT", `/batches/${id}`, b),
+  freezeBatch: (id: number, on: boolean, date?: string) => req<{ id: number }>("POST", `/batches/${id}/freeze`, { on, date: date ?? null }),
   deleteBatch: (id: number) => req<{ ok: true }>("DELETE", `/batches/${id}`),
 
   recipes: () => req<RecipeListItem[]>("GET", "/recipes"),
@@ -212,23 +217,8 @@ export async function recommendLive(hint: string, onEvent: (e: RecommendEvent) =
  * Auslesen mit Zwischenständen: liest NDJSON-Zeilen und meldet jede an onEvent.
  * Liefert den Entwurf oder wirft ApiError wie der normale Weg.
  */
-export async function scrapeLive(
-  input: { url?: string; name?: string; image?: string },
-  onEvent: (e: ScrapeEvent) => void,
-  signal?: AbortSignal,
-): Promise<ScrapeDraft> {
-  let res: Response;
-  try {
-    res = await fetch("/api/scrape", {
-      method: "POST",
-      headers: { "content-type": "application/json", accept: "application/x-ndjson" },
-      body: JSON.stringify(input),
-      signal,
-    });
-  } catch (e) {
-    if (e instanceof DOMException && e.name === "AbortError") throw e;
-    throw new ApiError("Server nicht erreichbar", 0, {});
-  }
+/** NDJSON-Antwort von /api/scrape oder /api/scrape/jobs/:id lesen, bis „done“ (Entwurf) oder „error“ (Ausnahme) */
+async function readScrapeStream(res: Response, onEvent: (e: ScrapeEvent) => void): Promise<ScrapeDraft> {
   if (!res.ok || !res.body || !res.headers.get("content-type")?.includes("ndjson")) {
     const data = (await res.json().catch(() => ({}))) as Record<string, unknown>;
     if (!res.ok) throw new ApiError(String(data.error ?? `Fehler ${res.status}`), res.status, data);
@@ -262,6 +252,21 @@ export async function scrapeLive(
   handle(buf);
   if (!result) throw new ApiError("Verbindung zum Server abgebrochen. Bitte erneut versuchen.", 0, {});
   return result;
+}
+
+async function ndjson(url: string, init: RequestInit): Promise<Response> {
+  try {
+    return await fetch(url, { ...init, headers: { ...init.headers, accept: "application/x-ndjson" } });
+  } catch (e) {
+    if (e instanceof DOMException && e.name === "AbortError") throw e;
+    throw new ApiError("Server nicht erreichbar", 0, {});
+  }
+}
+
+/** Auslese-Auftrag verfolgen: erst der bisherige Stand, dann live bis zum Ende. Abbrechen trennt nur, der Auftrag läuft weiter */
+export async function followScrapeJob(id: string, onEvent: (e: ScrapeEvent) => void, signal?: AbortSignal): Promise<ScrapeDraft> {
+  const res = await ndjson(`/api/scrape/jobs/${encodeURIComponent(id)}`, { signal });
+  return readScrapeStream(res, onEvent);
 }
 
 export const imageUrl = (file: string) => `/images/${file}`;

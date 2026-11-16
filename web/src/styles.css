@@ -28,6 +28,8 @@
   --c-red: #b3261e;
   --c-red-soft: #fbeceb;
   --c-orange: #b5540f;
+  --c-cold: #2f6fb5;
+  --c-cold-soft: #e8f0fa;
   --c-chart-muted: #b9bbb4;
   --c-grid: #eeeeea;
   /* Shot-Kurve der Decent (geprüft auf Farbsehschwäche) */
@@ -71,6 +73,8 @@
     --c-red: #ff7a6e;
     --c-red-soft: rgba(255, 122, 110, 0.14);
     --c-orange: #f0a35c;
+    --c-cold: #7fb0e6;
+    --c-cold-soft: rgba(127, 176, 230, 0.14);
     --c-chart-muted: #5a5e58;
     --c-grid: #262927;
     --c-pressure: #3f9a6c;
@@ -108,6 +112,8 @@
   --color-bad: var(--c-red);
   --color-bad-soft: var(--c-red-soft);
   --color-warn: var(--c-orange);
+  --color-cold: var(--c-cold);
+  --color-cold-soft: var(--c-cold-soft);
   --font-sans: "Manrope Variable", system-ui, -apple-system, "Segoe UI", sans-serif;
   --font-display: "Manrope Variable", system-ui, -apple-system, "Segoe UI", sans-serif;
   --color-line: var(--c-line);
@@ -256,6 +262,19 @@
     background-position: 200% 0;
   }
 }
+@keyframes toast-top-in {
+  from {
+    transform: translateY(-12px);
+    opacity: 0;
+  }
+  to {
+    transform: none;
+    opacity: 1;
+  }
+}
+.anim-toast-top {
+  animation: toast-top-in 0.28s cubic-bezier(0.2, 0.9, 0.3, 1);
+}
 .anim-sheet {
   animation: sheet-in 0.28s cubic-bezier(0.2, 0.9, 0.3, 1);
 }
@@ -340,6 +359,7 @@
 
 @media (prefers-reduced-motion: reduce) {
   .anim-sheet,
+  .anim-toast-top,
   .anim-fade,
   .anim-pop,
   .anim-rise,

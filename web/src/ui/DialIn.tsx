@@ -1,13 +1,13 @@
 import { useQuery } from "@tanstack/react-query";
-import { ArrowDownRight, ArrowUpRight, Check, Compass as CompassIcon, Lightbulb } from "lucide-react";
+import { ArrowDown, ArrowDownRight, ArrowUp, ArrowUpRight, Check, Compass as CompassIcon, Crosshair, Lightbulb } from "lucide-react";
 import { useMemo, useState } from "react";
 import { DEFAULT_GRINDER, grinderProfile, type GrinderProfile } from "../../../shared/compass.ts";
-import { isGoodBrew, type GrindPrediction } from "../../../shared/grind.ts";
+import { grindNumber, isGoodBrew, type GrindPrediction } from "../../../shared/grind.ts";
 import { formatScore } from "../../../shared/sca.ts";
-import { daysBetween, isSca, TASTE_LABEL, type Batch, type Brew, type CoffeeDetail } from "../../../shared/types.ts";
+import { bagAge, isSca, TASTE_LABEL, type Batch, type Brew, type CoffeeDetail } from "../../../shared/types.ts";
 import { api } from "../api.ts";
-import { brewGrinder, brewMethod, espressoHint, grindPoints, lastGoodGrind, ratioMiss, ratioOf, tipGrind, type DialHint } from "../lib/dialin.ts";
-import { normTime, timeMiss } from "../../../shared/shot.ts";
+import { brewGrinder, brewMethod, espressoHint, grindPoints, lastGoodGrind, learnedK, nextShot, ratioMiss, ratioOf, type DialHint, type NextShot } from "../lib/dialin.ts";
+import { fmtSec, mid, normTime, timeShifted, timeMiss, type ShotTarget } from "../../../shared/shot.ts";
 import { ShotTargetLine, ShotTargetSheet, useShotTarget } from "./ShotTarget.tsx";
 import { fmtBrewTime, fmtDateShort, fmtNum, fmtTime, todayIso } from "../lib/format.ts";
 import { ScoreChart, type ScorePoint } from "./charts.tsx";
@@ -37,6 +37,77 @@ export function DialHintBox({ hint, compact, next }: { hint: DialHint; compact?:
         </span>
         <span className="text-[13px] text-ink2">{hint.text}</span>
       </div>
+    </div>
+  );
+}
+
+/** Chip zum nächsten Mahlgrad: „3 µm feiner“ oder „Bleib dabei“, Symbol und Wort statt nur Farbe */
+export function MoveChip({ move, finer, unit, step, hold }: { move: number; finer: boolean; unit: string; step: number; hold?: boolean }) {
+  const stay = Math.abs(move) < step / 2;
+  return (
+    <span
+      className={cx(
+        "inline-flex h-7 items-center gap-1.5 rounded-full px-2.5 text-[13px] font-bold whitespace-nowrap",
+        stay ? "bg-good-soft text-good" : "bg-accent-soft text-accent",
+      )}
+    >
+      {stay ? (
+        <>
+          <Check size={15} strokeWidth={2.6} aria-hidden="true" />
+          {hold ? "Mahlgrad gleich" : "Bleib dabei"}
+        </>
+      ) : (
+        <>
+          {finer ? <ArrowDown size={15} strokeWidth={2.6} aria-hidden="true" /> : <ArrowUp size={15} strokeWidth={2.6} aria-hidden="true" />}
+          <span className="tnum">
+            {fmtG(Math.abs(move))} {unit} {finer ? "feiner" : "gröber"}
+          </span>
+        </>
+      )}
+    </span>
+  );
+}
+
+/** Kaffee-Detail: nächster Shot groß wie in der Shot-Analyse, darunter der Hinweis als Begründung */
+function NextShotBox({ next, hint, target, profile, k }: { next: NextShot; hint: DialHint | null; target: ShotTarget; profile: GrinderProfile; k: number | null }) {
+  const u = profile.unit;
+  const from = `${fmtU(next.from, u)}${next.brew.time_s != null ? `, ${fmtBrewTime(next.brew)}` : ""}`;
+  const shifted = next.time != null && next.brew.time_s != null && timeShifted(next.time, next.brew.time_s);
+  const sub =
+    next.why === "zeit"
+      ? `Vom letzten Shot (${from}${shifted ? ` ≙ ${fmtSec(next.time!)} s` : ""}) zur Fenstermitte ${fmtNum(mid(target.time))} s`
+      : next.why === "geschmack"
+        ? `Vom letzten Shot (${from}) nach dem Geschmack`
+        : `Letzter Shot ${from}`;
+  return (
+    <div className={cx("@container flex flex-col gap-3 rounded-[14px] px-4 pt-3.5 pb-3.5", next.stay ? "bg-good-soft" : "bg-accent-soft")}>
+      <div className="flex flex-wrap items-end justify-between gap-x-4 gap-y-2">
+        <div className="flex min-w-0 flex-col gap-1.5">
+          <span className={cx("flex items-center gap-1.5 text-[12px] font-bold tracking-[0.06em] uppercase", next.stay ? "text-good" : "text-accent")}>
+            <Crosshair size={15} strokeWidth={2.4} aria-hidden="true" />
+            Nächster Shot
+          </span>
+          <span className="flex items-baseline gap-1.5">
+            <span className="tnum font-display text-[44px] leading-none font-extrabold tracking-[-0.035em]">{fmtG(next.value)}</span>
+            {u && <span className="text-[18px] font-bold text-ink3">{u}</span>}
+          </span>
+        </div>
+        <span className="rounded-full bg-card">
+          <MoveChip move={next.move} finer={next.finer} unit={u} step={profile.step} hold={next.why === "halten"} />
+        </span>
+      </div>
+      <span className="tnum text-[13px] leading-snug text-ink2">{sub}</span>
+      {hint && (
+        <span className="flex flex-col gap-0.5 border-t border-ink/10 pt-2.5 text-[13px] leading-snug">
+          <span className="font-bold">{hint.title}</span>
+          <span className="text-ink2">{hint.text}</span>
+        </span>
+      )}
+      {next.why === "zeit" && (
+        <span className="text-[12px] text-ink3">
+          {k != null ? `Gelernt: ${fmtNum(k)} ${u || "Stufen"} je Sekunde.` : `Annahme ${fmtNum(profile.shotK)} ${u || "Stufen"} je Sekunde, bis eine Tüte zwei Shots zum Vergleich hat.`}
+        </span>
+      )}
     </div>
   );
 }
@@ -329,14 +400,17 @@ export function DialInCard({ data, batchFilter, className, onPick }: { data: Cof
     sub: [brew.grind, brew.time_s != null ? fmtBrewTime(brew) : null, verdict(brew)].filter(Boolean).join(" · "),
   }));
   const espresso = m === "Espresso";
-  const hint = espresso ? espressoHint(bagBrews[0] ?? null, target, pred?.k ?? null, profile) : null;
-  const tip = tipGrind(hint, bagBrews[0] ?? null, profile);
+  // k erst abwarten, sonst springt die Empfehlung von der Annahme auf den gelernten Wert (ohne Profil fragt niemand danach)
+  const kReady = q.data !== undefined || q.isError || q.fetchStatus === "idle";
+  const k = learnedK(pred);
+  const hint = espresso && kReady ? espressoHint(bagBrews[0] ?? null, target, k, profile) : null;
+  const next = espresso && kReady ? nextShot(bagBrews, hint, target, k, profile) : null;
   const bagLabel = bag ? (bag.roast_date ? `Tüte vom ${fmtDateShort(bag.roast_date)}` : "Tüte ohne Röstdatum") : "Keine Tüte";
 
   return (
     <Card className={cx("flex flex-col gap-4", className)}>
       <SectionTitle
-        sub={`${bagLabel}${bag?.roast_date ? ` · heute Tag ${daysBetween(bag.roast_date, todayIso())}` : ""}.${points.length > 1 ? " Andere Tüten grau." : ""}`}
+        sub={`${bagLabel}${bag?.roast_date ? ` · heute Tag ${bagAge(bag, todayIso())}` : ""}.${points.length > 1 ? " Andere Tüten grau." : ""}`}
         action={
           choices.length > 1 ? (
             <div className="no-scrollbar max-w-full overflow-x-auto">
@@ -352,13 +426,13 @@ export function DialInCard({ data, batchFilter, className, onPick }: { data: Cof
         <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1">
           <span className="text-[12px] font-bold tracking-[0.04em] text-ink2 uppercase">Letzter guter Mahlgrad</span>
           <span className="tnum text-[22px] font-extrabold">{good.grind}</span>
-          <span className="text-[12px] text-ink3">vom {fmtDateShort(good.brewed_at)}, wird beim nächsten Bezug vorgeschlagen</span>
+          <span className="text-[12px] text-ink3">vom {fmtDateShort(good.brewed_at)}{!next || next.value === grindNumber(good.grind) ? ", wird beim nächsten Bezug vorgeschlagen" : ""}</span>
         </div>
       )}
       {espresso && <ShotTargetLine target={target} onEdit={() => setEditTarget(true)} />}
       <ShotTargetSheet coffee={c} open={editTarget} onClose={() => setEditTarget(false)} />
       {wantPred && pred && <CompassBox tight p={pred} title={pred.compass ? "Mahlkompass" : bag ? "Startwert für diese Tüte" : "Startwert"} />}
-      {hint && <DialHintBox hint={hint} next={tip != null && profile ? fmtU(tip, profile.unit) : null} />}
+      {next && profile ? <NextShotBox next={next} hint={hint} target={target} profile={profile} k={k} /> : hint && <DialHintBox hint={hint} />}
 
       {points.length > 1 && (
         <ScoreChart
@@ -389,7 +463,7 @@ export function DialInCard({ data, batchFilter, className, onPick }: { data: Cof
             // Espresso: Zeit und Verhältnis am Ziel messen (grün im Ziel, gelb daneben)
             const tOk = espresso && b.time_s != null ? timeMiss(normTime(b.time_s, r, target), target) === 0 : null;
             const rOk = espresso && r != null ? ratioMiss(r, target) === 0 : null;
-            const day = bag ? daysBetween(bag.roast_date, b.brewed_at) : null;
+            const day = bag ? bagAge(bag, b.brewed_at) : null;
             return (
               <button
                 key={b.id}

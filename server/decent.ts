@@ -49,6 +49,8 @@ export function parseShot(input: unknown): ParsedShot {
   const clock = num(s.clock) ?? num(s.timestamp);
   const t = nums(s.elapsed);
   if (clock == null || clock < 1e9) throw new ShotError("Kein Zeitpunkt im Shot (clock)");
+  // Sekunden bis 2286; größer heißt Millisekunden oder kaputt (toISOString würde werfen)
+  if (clock >= 1e10) throw new ShotError("Zeitpunkt im Shot (clock) ist keine Unix-Zeit in Sekunden");
   if (!t.length) throw new ShotError("Shot ohne Messwerte (elapsed)");
   const pressure = obj(s.pressure);
   const flow = obj(s.flow);
@@ -97,7 +99,7 @@ export function parseShot(input: unknown): ParsedShot {
     time_s: time != null && time > 0 ? r1(time) : null,
     preinfusion_s: pi != null && time != null && pi < time ? pi : null,
     temp_c: temp != null ? r1(temp) : null,
-    peak_bar: p.length ? r1(Math.max(...p)) : null,
+    peak_bar: p.length ? r1(p.reduce((a, b) => Math.max(a, b), -Infinity)) : null,
     grind: text(obj(meta.grinder).setting, 40),
     bean,
     curve,

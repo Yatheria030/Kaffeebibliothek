@@ -2,13 +2,13 @@ import { ArrowDown, ArrowUp, Check, Clock3, Crosshair, Droplets, Scale } from "l
 import { useState, type ReactNode } from "react";
 import type { GrinderProfile } from "../../../shared/compass.ts";
 import { brewRatio, grindNumber, isGoodBrew } from "../../../shared/grind.ts";
-import { fmtRatio, fmtWindow, mid, normTime, piMiss, piSeconds, piSetting, targetLine, timeMiss, type ResolvedTarget } from "../../../shared/shot.ts";
+import { fmtRatio, fmtSec, fmtWindow, mid, timeShifted, normTime, piMiss, piSeconds, piSetting, targetLine, timeMiss, type ResolvedTarget } from "../../../shared/shot.ts";
 import { TASTE_LABEL, type Brew } from "../../../shared/types.ts";
-import { ratioMiss } from "../lib/dialin.ts";
+import { ratioMiss, type NextShot } from "../lib/dialin.ts";
 import { fmtDateShort, fmtNum } from "../lib/format.ts";
 import { Tip, useWidth } from "./charts.tsx";
 import { cx } from "./controls.tsx";
-import { fmtG, fmtU } from "./DialIn.tsx";
+import { fmtG, fmtU, MoveChip } from "./DialIn.tsx";
 
 type Shot = { dose_g: number | null; water_g: number | null; time_s: number | null; preinfusion_s?: number | null; grind: string };
 
@@ -189,7 +189,7 @@ function BagChart({
           </text>
         ))}
         <text x={w - m.r} y={h - 4} textAnchor="end" fontSize={12} fontWeight={600} fill="var(--c-ink3)">
-          {byGrind ? `Mahlgrad${unit ? ` in ${unit}` : ""} · feiner ← → gröber` : "Shots dieser Tüte"}
+          {byGrind ? `Mahlgrad${unit ? ` in ${unit}` : ""} · ${profile?.coarserUp === false ? "gröber ← → feiner" : "feiner ← → gröber"}` : "Shots dieser Tüte"}
         </text>
         {/* Verlauf in Reihenfolge */}
         {points.length > 1 && (
@@ -231,8 +231,8 @@ function BagChart({
           <div className="font-bold">{hp.now ? "Dieser Shot" : hp.b ? fmtDateShort(hp.b.brewed_at) : ""}</div>
           {byGrind && <div className="tnum">Mahlgrad {fmtU(hp.x, unit)}</div>}
           <div className="tnum">
-            {(hp.now ? piNow : hp.b?.preinfusion_s) ? `${Math.round((hp.now ? piNow : hp.b?.preinfusion_s)!)} + ` : ""}
-            {hp.raw} s{Math.round(hp.y) !== hp.raw ? ` ≙ ${Math.round(hp.y)} s bei ${fmtRatio(target.ratio)}` : ""}
+            {(hp.now ? piNow : hp.b?.preinfusion_s) ? `${fmtSec((hp.now ? piNow : hp.b?.preinfusion_s)!)} + ` : ""}
+            {fmtSec(hp.raw)} s{timeShifted(hp.y, hp.raw) ? ` ≙ ${fmtSec(hp.y)} s bei ${fmtRatio(target.ratio)}` : ""}
             {hp.ratio != null ? ` · 1:${n2(hp.ratio)}` : ""}
           </div>
           {hp.b && hp.b.taste.length > 0 && <div className="text-ink2">{hp.b.taste.map((t) => TASTE_LABEL.get(t)).join(", ")}</div>}
@@ -249,20 +249,24 @@ export function ShotPanel({
   bag,
   profile,
   k,
+  next,
 }: {
   target: ResolvedTarget;
   p: Shot;
   /** frühere Shots dieser Tüte (gleiche Zubereitung), neueste zuerst */
   bag: Brew[];
   profile: GrinderProfile | null;
+  /** gelerntes k, null = nur die Annahme der Mühle */
   k: number | null;
+  /** „Nächster Shot“ aus `nextShot` (dieselbe Rechnung wie Karte und Tipp im Dialog) */
+  next: NextShot | null;
 }) {
   const ratio = brewRatio(p);
   const rm = ratio != null ? ratioMiss(ratio, target) : null;
   const tn = p.time_s != null ? normTime(p.time_s, ratio, target) : null;
   const tm = tn != null ? timeMiss(tn, target) : null;
-  const shifted = tn != null && p.time_s != null && Math.round(tn) !== p.time_s;
-  const tDelta = tm != null && tm !== 0 ? `${tm > 0 ? "+" : "−"}${Math.abs(Math.round(tm))} s` : undefined;
+  const shifted = tn != null && p.time_s != null && timeShifted(tn, p.time_s);
+  const tDelta = tm != null && tm !== 0 ? `${tm > 0 ? "+" : "−"}${fmtSec(Math.abs(tm))} s` : undefined;
   const pi = p.preinfusion_s ?? null;
   const pm = pi != null ? piMiss(pi, target) : null;
   const pDelta = pm != null && pm !== 0 ? `${pm > 0 ? "+" : "−"}${Math.abs(Math.round(pm))} s` : undefined;
@@ -291,13 +295,15 @@ export function ShotPanel({
   }));
   if (tn != null && p.time_s != null) points.push({ key: "now", x: byGrind ? nowGrind! : points.length + 1, y: tn, raw: p.time_s, now: true, good: false, ratio });
 
-  // Nächster Shot: vom jüngsten Shot mit Zeit über die gelernte Steigung k zur Fenstermitte, auf die Stufe der Mühle gerundet
-  const anchor = points[points.length - 1] ?? null;
-  const dir = profile?.coarserUp === false ? -1 : 1;
+  // Nächster Shot kommt fertig aus `nextShot`; Anker ist der Shot, von dem er ausgeht (der jetzige oder ein früherer der Tüte)
+  const anchor = next ? (points.find((pt) => (next.brew.id === -1 ? pt.now : pt.b?.id === next.brew.id)) ?? null) : null;
   const step = profile?.step ?? 1;
-  const goal = byGrind && anchor && k ? Math.round((anchor.x - dir * k * (mid(target.time) - anchor.y)) / step) * step : null;
-  const move = goal != null && anchor ? goal - anchor.x : null;
-  const finer = move != null && dir * move < 0;
+  const goal = byGrind && next ? next.value : null;
+  const move = goal != null && next ? next.move : null;
+  const finer = next?.finer ?? false;
+  // Raute und Linie im Diagramm nur, wenn die Zeit den Weg bestimmt (zur Fenstermitte)
+  const chartGoal = next?.why === "zeit" ? goal : null;
+  const kText = k != null ? `Gelernt: ${fmtNum(k)} ${profile?.unit || "Stufen"} je Sekunde` : `Annahme ${fmtNum(profile?.shotK ?? 1)} ${profile?.unit || "Stufen"} je Sekunde, bis eine Tüte zwei Shots zum Vergleich hat`;
 
   return (
     <section className="flex flex-col overflow-hidden rounded-[18px] bg-card shadow-card" aria-label="Shot-Analyse">
@@ -326,14 +332,14 @@ export function ShotPanel({
         <Metric
           icon={<Clock3 size={14} strokeWidth={2.4} aria-hidden="true" />}
           label="Zeit"
-          big={p.time_s != null ? String(p.time_s) : "–"}
+          big={p.time_s != null ? fmtSec(p.time_s) : "–"}
           unit="s"
           sub={
             p.time_s == null ? (
               "Bezugszeit eintragen"
             ) : shifted ? (
               <span className="tnum">
-                ≙ <b className="text-ink">{Math.round(tn!)} s</b> bei {fmtRatio(target.ratio)} (auf dein Zielverhältnis umgerechnet)
+                ≙ <b className="text-ink">{fmtSec(tn!)} s</b> bei {fmtRatio(target.ratio)} (auf dein Zielverhältnis umgerechnet)
               </span>
             ) : (
               <span className="tnum">Fenster {fmtWindow(target.time)}</span>
@@ -354,7 +360,7 @@ export function ShotPanel({
         <Metric
           icon={<Droplets size={14} strokeWidth={2.4} aria-hidden="true" />}
           label="Preinfusion"
-          big={pi != null ? String(Math.round(pi)) : "–"}
+          big={pi != null ? fmtSec(pi) : "–"}
           unit="s"
           sub={
             pi == null ? (
@@ -386,7 +392,7 @@ export function ShotPanel({
             label={`Preinfusion gegen Fenster ${fmtWindow(target.pi)}`}
           />
         </Metric>
-        {goal != null && move != null && anchor && (
+        {goal != null && move != null && next && (
           <Metric
             icon={<Crosshair size={14} strokeWidth={2.4} aria-hidden="true" />}
             label="Nächster Shot"
@@ -394,34 +400,15 @@ export function ShotPanel({
             unit={profile?.unit}
             sub={
               <span className="tnum">
-                vom {anchor.now ? "jetzigen" : "letzten"} Shot ({fmtU(anchor.x, profile?.unit ?? "")}, {Math.round(anchor.y)} s) zur Fenstermitte {fmtNum(mid(target.time))} s
+                vom {next.brew.id === -1 ? "jetzigen" : "letzten"} Shot ({fmtU(next.from, profile?.unit ?? "")}
+                {anchor ? `, ${fmtSec(anchor.raw)} s${timeShifted(anchor.y, anchor.raw) ? ` ≙ ${fmtSec(anchor.y)} s` : ""}` : ""})
+                {next.why === "zeit" ? ` zur Fenstermitte ${fmtNum(mid(target.time))} s` : next.why === "geschmack" ? " nach dem Geschmack" : ", Mahlgrad gleich"}
               </span>
             }
-            status={
-              <span
-                className={cx(
-                  "inline-flex h-7 items-center gap-1.5 rounded-full px-2.5 text-[13px] font-bold whitespace-nowrap",
-                  Math.abs(move) < step / 2 ? "bg-good-soft text-good" : "bg-accent-soft text-accent",
-                )}
-              >
-                {Math.abs(move) < step / 2 ? (
-                  <>
-                    <Check size={15} strokeWidth={2.6} aria-hidden="true" />
-                    Bleib dabei
-                  </>
-                ) : (
-                  <>
-                    {finer ? <ArrowDown size={15} strokeWidth={2.6} aria-hidden="true" /> : <ArrowUp size={15} strokeWidth={2.6} aria-hidden="true" />}
-                    <span className="tnum">
-                      {fmtG(Math.abs(move))} {profile?.unit} {finer ? "feiner" : "gröber"}
-                    </span>
-                  </>
-                )}
-              </span>
-            }
+            status={<MoveChip move={move} finer={finer} unit={profile?.unit ?? ""} step={step} hold={next.why === "halten"} />}
           >
             <p className="m-0 text-[12px] leading-snug text-ink3">
-              Gelernt: {fmtNum(k!)} {profile?.unit || "Stufen"} je Sekunde. Rauten-Linie im Diagramm darunter.
+              {kText}.{chartGoal != null ? " Rauten-Linie im Diagramm darunter." : ""}
             </p>
           </Metric>
         )}
@@ -446,17 +433,17 @@ export function ShotPanel({
                 <span className="size-2.5 rounded-full border-2 border-ink3" aria-hidden="true" />
                 Andere
               </span>
-              {byGrind && k && (
+              {byGrind && chartGoal != null && (
                 <span className="flex items-center gap-1.5">
                   <span className="size-2.5 rotate-45 bg-accent" aria-hidden="true" />
-                  Ziel-Mahlgrad (gelernt {fmtNum(k)} {profile?.unit || "Stufen"}/s)
+                  Ziel-Mahlgrad ({k != null ? `gelernt ${fmtNum(k)}` : `Annahme ${fmtNum(profile?.shotK ?? 1)}`} {profile?.unit || "Stufen"}/s)
                 </span>
               )}
             </span>
           )}
         </div>
         {points.length ? (
-          <BagChart points={points} target={target} profile={profile} goal={goal} anchor={anchor} byGrind={byGrind} piNow={pi} />
+          <BagChart points={points} target={target} profile={profile} goal={chartGoal} anchor={anchor} byGrind={byGrind} piNow={pi} />
         ) : (
           <p className="m-0 py-6 text-center text-[13px] text-ink3">Erster Shot dieser Tüte. Mit der Zeit erscheint er hier, jeder weitere kommt dazu.</p>
         )}

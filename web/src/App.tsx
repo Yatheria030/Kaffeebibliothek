@@ -16,6 +16,7 @@ import { StockPage } from "./pages/Stock.tsx";
 import { WikiArticlePage, WikiHome } from "./pages/Wiki.tsx";
 import { Button, EmptyState } from "./ui/controls.tsx";
 import { ConfirmHost, Drawer, ToastHost } from "./ui/overlay.tsx";
+import { ScrapeJobsDock } from "./ui/ScrapeJobs.tsx";
 import { Page, ShellProvider, Sidebar, Toolbar } from "./ui/Shell.tsx";
 
 /** Scrollposition je Seite merken; ein ?bezug-Sheet zählt nicht als neue Seite */
@@ -138,7 +139,7 @@ export function App() {
       page = <EditCoffee key={route.id} id={route.id} />;
       break;
     case "new":
-      page = <AddCoffee />;
+      page = <AddCoffee job={route.job} />;
       break;
     case "recipes":
       page = <Recipes />;
@@ -174,10 +175,12 @@ export function App() {
         <Drawer open={drawer} onClose={() => setDrawer(false)}>
           <Sidebar route={route} onNavigate={() => setDrawer(false)} />
         </Drawer>
-        <main className="flex min-w-0 flex-1 flex-col">
+        {/* Platz für das Dock der Hintergrund-Auslesungen, damit es nichts Wichtiges verdeckt */}
+        <main className="flex min-w-0 flex-1 flex-col pb-[var(--dock-h,0px)]">
           <PageBoundary path={pathKey}>{page}</PageBoundary>
         </main>
       </div>
+      <ScrapeJobsDock />
       <ConfirmHost />
       <ToastHost />
     </ShellProvider>

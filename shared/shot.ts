@@ -162,9 +162,17 @@ export function piMiss(pi: number, target: ShotTarget): number {
   return pi < target.pi[0] ? pi - target.pi[0] : pi > target.pi[1] ? pi - target.pi[1] : 0;
 }
 
-/** „7 + 29 s“: Preinfusion und Bezugszeit getrennt, ohne Preinfusion nur die Bezugszeit */
+/** Auf Zehntel: Mühle und Maschine liefern Zeit und Mahlgrad genauer, als ihre Displays zeigen (die schneiden ab) */
+export const tenth = (v: number) => Math.round(v * 10) / 10;
+/** Sekunden mit höchstens einer Nachkommastelle: „26,8“, „27“ */
+export const fmtSec = (v: number) => tenth(v).toLocaleString("de-DE", { maximumFractionDigits: 1 });
+
+/** Umgerechnete Zeit weicht sichtbar ab (ab einer halben Sekunde, sonst wäre „26,8 s ≙ 26,9 s“ nur Rauschen) */
+export const timeShifted = (norm: number, raw: number) => Math.abs(norm - raw) >= 0.5;
+
+/** „7 + 26,8 s“: Preinfusion und Bezugszeit getrennt, ohne Preinfusion nur die Bezugszeit */
 export const fmtShotTime = (time: number | null, pi: number | null | undefined, unit = " s") =>
-  time == null ? "–" : pi != null && pi > 0 ? `${Math.round(pi)} + ${Math.round(time)}${unit}` : `${Math.round(time)}${unit}`;
+  time == null ? "–" : pi != null && pi > 0 ? `${fmtSec(pi)} + ${fmtSec(time)}${unit}` : `${fmtSec(time)}${unit}`;
 
 const n1 = (v: number) => v.toLocaleString("de-DE", { maximumFractionDigits: 2 });
 export const fmtRatio = (r: [number, number]) => (r[0] === r[1] ? `1:${n1(r[0])}` : `1:${n1(r[0])}–${n1(r[1])}`);

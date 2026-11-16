@@ -1,3 +1,5 @@
+import { fmtSec } from "../../../shared/shot.ts";
+
 const dDate = new Intl.DateTimeFormat("de-DE", { day: "2-digit", month: "2-digit", year: "numeric" });
 const dShort = new Intl.DateTimeFormat("de-DE", { day: "2-digit", month: "2-digit" });
 const dTime = new Intl.DateTimeFormat("de-DE", { hour: "2-digit", minute: "2-digit" });
@@ -80,41 +82,52 @@ export function fmtTemp(v: number | null | undefined): string {
   return v == null ? "–" : `${n1.format(v)} °C`;
 }
 
-/** Sekunden als m:ss, unter einer Minute als "28 s" */
+/** Sekunden als m:ss, unter einer Minute als "28 s" oder "26,8 s" */
 export function fmtTime(s: number | null | undefined): string {
   if (s == null || !Number.isFinite(s)) return "–";
-  if (s < 60) return `${Math.round(s)} s`;
-  const m = Math.floor(s / 60);
-  const r = Math.round(s % 60);
-  return `${m}:${String(r).padStart(2, "0")}`;
+  if (s < 59.95) return `${fmtSec(s)} s`;
+  return timeInput(s);
 }
 
-/** Bezugszeit mit Preinfusion davor: „7 + 29 s“, ohne Preinfusion wie `fmtTime` */
+/** Bezugszeit mit Preinfusion davor: „7 + 26,8 s“, ohne Preinfusion wie `fmtTime` */
 export function fmtBrewTime(b: { time_s: number | null; preinfusion_s?: number | null }): string {
   if (b.time_s == null) return "–";
-  return b.preinfusion_s ? `${Math.round(b.preinfusion_s)} + ${fmtTime(b.time_s)}` : fmtTime(b.time_s);
+  return b.preinfusion_s ? `${fmtSec(b.preinfusion_s)} + ${fmtTime(b.time_s)}` : fmtTime(b.time_s);
 }
 
 /** Für Eingabefelder: immer m:ss */
 export function timeInput(s: number | null | undefined): string {
   if (s == null) return "";
-  const m = Math.floor(s / 60);
-  const r = Math.round(s % 60);
-  return `${m}:${String(r).padStart(2, "0")}`;
+  const t = Math.round(s);
+  return `${Math.floor(t / 60)}:${String(t % 60).padStart(2, "0")}`;
 }
 
-/** "3:05", "3.05", "185", "28s" -> Sekunden */
+/** Für Sekundenfelder (Espresso): „26,8“ */
+export const secondsInput = (s: number | null | undefined) => (s == null ? "" : fmtSec(s));
+
+/** "26,8", "26.8", "27", "27s" -> Sekunden auf Zehntel; "0:27" geht auch */
+export function parseSeconds(str: string): number | null {
+  const t = str.trim().replace(/\s*s$/i, "");
+  const d = t.match(/^(\d{1,3})(?:[.,](\d))?$/);
+  if (d) return Number(d[1]) + (d[2] ? Number(d[2]) / 10 : 0);
+  return /:/.test(t) ? parseTime(t) : null;
+}
+
+/** "3:05", "3.05", "185", "28s" -> Sekunden; "2,5" sind 2,5 Minuten; Sekunden über 59 ungültig */
 export function parseTime(str: string): number | null {
   const t = str.trim().replace(/\s*s$/i, "");
   if (!t) return null;
+  const d = t.match(/^(\d{1,3})[.,](\d)$/);
+  if (d) return Math.round((Number(d[1]) + Number(d[2]) / 10) * 60);
   const m = t.match(/^(\d{1,3})[:.,](\d{1,2})$/);
-  if (m) return Number(m[1]) * 60 + Number(m[2]);
+  if (m) return Number(m[2]) < 60 ? Number(m[1]) * 60 + Number(m[2]) : null;
   return /^\d{1,5}$/.test(t) ? Number(t) : null;
 }
 
-/** "16,5" -> 16.5; leer -> null */
+/** "16,5" -> 16.5, "1.000" -> 1000 (Punkt mit drei Ziffern ist der Tausenderpunkt); leer -> null */
 export function parseNum(str: string): number | null {
-  const t = str.trim().replace(/\s/g, "").replace(",", ".");
+  const raw = str.trim().replace(/\s/g, "");
+  const t = /^[1-9]\d{0,2}(\.\d{3})+(,\d*)?$/.test(raw) ? raw.replace(/\./g, "").replace(",", ".") : raw.replace(",", ".");
   if (!t) return null;
   const n = Number(t);
   return Number.isFinite(n) ? n : null;

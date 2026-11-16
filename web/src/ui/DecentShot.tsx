@@ -5,7 +5,7 @@ import { useMemo, useState, type PointerEvent as RPointerEvent } from "react";
 import type { DecentStatus, MachineShot, ShotCurve } from "../../../shared/types.ts";
 import { api } from "../api.ts";
 import { fmtDateShort, fmtRelative } from "../lib/format.ts";
-import { fmtShotTime } from "../../../shared/shot.ts";
+import { fmtSec, fmtShotTime } from "../../../shared/shot.ts";
 import { Button, Spinner } from "./controls.tsx";
 import { CoffeeLink } from "./CoffeeLink.tsx";
 import { Tip, useWidth } from "./charts.tsx";
@@ -306,7 +306,7 @@ export function MachineCard({
                 label="Zeit"
                 value={sel.time_s != null ? fmtShotTime(sel.time_s - (sel.preinfusion_s ?? 0), sel.preinfusion_s, "") : "–"}
                 unit={sel.time_s != null ? "s" : undefined}
-                sub={sel.time_s != null && sel.preinfusion_s ? `Preinf. + Bezug = ${Math.round(sel.time_s)} s` : null}
+                sub={sel.time_s != null && sel.preinfusion_s ? `Preinf. + Bezug = ${fmtSec(sel.time_s)} s` : null}
               />
               <Stat
                 label="Ausbeute"

@@ -135,7 +135,7 @@ function create(c: CoffeeRow): StoredProfile {
 
 const COLS = `id, name, roaster, roast_level, shot_target, decent_profile`;
 
-/** Profil eines Kaffees, bei Bedarf angelegt (nicht für die Merkliste) */
+/** Profil eines Kaffees, bei Bedarf angelegt (nicht für „Gesehen“) */
 export function ensureProfile(id: number): StoredProfile | null {
   const c = db.prepare(`SELECT ${COLS}, wishlist FROM coffees WHERE id = ?`).get(id) as (CoffeeRow & { wishlist: number }) | undefined;
   if (!c || c.wishlist) return null;

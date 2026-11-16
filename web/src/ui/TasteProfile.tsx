@@ -258,7 +258,7 @@ function SuggestionCard({ s }: { s: Suggestion }) {
             navigate("/neu");
           }}
         >
-          Auf die Merkliste
+          Unter Gesehen ablegen
         </Button>
         <a
           href={s.url}

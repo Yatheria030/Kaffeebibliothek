@@ -58,17 +58,18 @@ into one brew and tells you where the grind setting has to go for the next shot.
 
 ### Library
 - Shelf with cut-out bag images or a compact list, light and dark
-- Views in the sidebar: **All**, **Open now**, **Stock**, **Finished**, **Wishlist**, **Archive**
+- Views in the sidebar: **All**, **Open now**, **Stock**, **Finished**, **Seen**, **Archive**
 - Filter by roast level, "roasted for" (filter, espresso, omni), country of origin, flavour and minimum score
 - Search (<kbd>/</kbd>), sort by last brewed, best score, name, roast date or recently added
 - "Recently viewed" in the sidebar, filters are remembered
 - Add a coffee with the button or simply drop an image or link onto the page
-- Wishlist for coffees you want to try: they move into the library with their first bag
+- "Seen" for coffees you came across: they move into the library with their first bag
 
 <img src="docs/screenshots/bibliothek-dunkel.jpg" alt="Library, dark" width="900">
 
 ### Capturing a coffee
 - Read in by **shop link, name or photo**: web search, pages read and finished fields appear live
+- Or **in the background**: keep browsing the app, progress shows in the bottom right and a notification tells you when it is done
 - Captures roaster, origin (country, region, farm, producer, altitude), varieties, process with details (fermentation,
   drying, honey colour, decaf method), roast level, "roasted for", flavour notes, cup score, bag size and price
 - Imports **roaster recipes** from the shop page
@@ -77,7 +78,9 @@ into one brew and tells you where the grind setting has to go for the next shot.
   Fine-tune in the "Ausrichten" (align) editor with a guide grid
 - Without an API key, everything works by hand
 
-<img src="docs/screenshots/auslesen.gif" alt="Live read-in: web search, pages read and fields filling in" width="640">
+| Live | In the background |
+|---|---|
+| <img src="docs/screenshots/auslesen.gif" alt="Live read-in: web search, pages read and fields filling in" width="440"> | <img src="docs/screenshots/hintergrund.gif" alt="Reading in the background: progress in the bottom right, notification when done" width="440"> |
 
 ### Coffee detail
 - Key figures: best score, brews, days since roast with freshness state, successful brews or average stars
@@ -132,6 +135,10 @@ into one brew and tells you where the grind setting has to go for the next shot.
   for filter, espresso and omni × light, medium, dark, adjustable in the settings
 - Sorted by urgency, **"open next"** at the top
 - Without roast date, "roasted for" or roast level it says "not assessable", never a guess
+- **Freezer** per bag: freeze and thaw with a date, days in the freezer do not count towards the roast age.
+  Frozen bags have their own section with the drinking window "if thawed today"
+- **"Freezing recommended"** for every unopened bag after the next one, resting bags only after their rest period. When thawing,
+  the app tells you the thawing time for the bag size
 
 | Light | Dark |
 |---|---|
@@ -153,7 +160,7 @@ into one brew and tells you where the grind setting has to go for the next shot.
 - **Costs**: €/kg, price per cup, spending per month, price per roaster, "does expensive mean better?"
 - Breakdown by origin (with a **world map**, click to filter the library), process, roast level and method
 - **What suits me?**: a taste profile from your ratings. On request, the Anthropic API searches your roasters' shops for
-  matching coffees, "add to wishlist" in one click
+  matching coffees, "file under Seen" in one click
 
 | Light | Dark |
 |---|---|
@@ -216,6 +223,8 @@ What happens in the background so the front feels simple.
 ### Reading in
 - The Anthropic API response is passed to the UI as an **NDJSON stream**: web search, pages read and half-finished fields
   appear live, before the model is done
+- Every read-in is a **job on the server**: reloading, leaving the page or locking the phone does not interrupt it, opening it
+  again replays what happened so far
 - Structured output through a tool (`save_coffee`), validated with zod. The model receives the known roasters so spellings match up
 - Roaster names are compared without filler words (roastery, coffee, GmbH), spaces and accents; processes are normalised to
   consistent spellings
@@ -229,7 +238,8 @@ What happens in the background so the front feels simple.
 - **Slope k** (µm per second) with a per-grinder prior, sharpened from shot pairs of the same bag. Days since the bag's first
   shot enter as a second variable, otherwise beans ageing in the hopper would skew k
 - Brew times are converted to the target ratio, so a 1:2.3 and a 1:2 are comparable
-- The learned model stays in memory until the database changes (`total_changes()` and `data_version`)
+- The learned model stays in memory until the database changes (`total_changes()` and `data_version`). It is computed in a
+  worker thread so the server keeps answering, and recomputed ahead of time after changes
 
 ### Grinder and machine
 - **Mahlkönig E64 WS on the home network**: the app downloads the grinder's SQLite database through its web interface and reads
@@ -248,6 +258,9 @@ What happens in the background so the front feels simple.
 - **Backups** as a hand-built ZIP (zlib), using `VACUUM INTO` for a consistent database snapshot while running
 - **Settings** with a clear order: value in the app, else environment, else built-in default. Timers reschedule on change
 - Keys and passwords never leave the server; the API only shows a hint such as `…a1b2`
+- Input is validated (dates, timestamps, size of requests and images). Images from links are only fetched from the public
+  internet, every redirect is checked
+- Days count in local time, a brew at 0:30 belongs to the new day
 
 ### Interface
 - React 19, TanStack Query, hash router. Links to a coffee prefetch its detail on hover, focus or touch

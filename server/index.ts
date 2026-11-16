@@ -15,7 +15,8 @@ import { ArchiveError, saveArchiveFile, SHOT_FILTER } from "./decent-archive.ts"
 import { coffeeProfile, profilesForTablet, updateProfile } from "./decent-profile.ts";
 import { decentStatus, getShot, listShots, pluginFiles, PLUGIN_NAME, saveShot, ShotError } from "./decent.ts";
 import { DATA_DIR, IMAGE_DIR } from "./db.ts";
-import { brewTemplate, predictGrind } from "./grind.ts";
+import { brewTemplate } from "./grind.ts";
+import { predictGrindAsync, warmGrind } from "./grind-pool.ts";
 import {
   connectGrinder, connectLocal, disconnectGrinder, disconnectLocal, GrinderSyncError, grinderStatus, listGrinderEvents, scheduleGrinderSync, syncGrinder,
 } from "./mahlkoenig.ts";
@@ -23,11 +24,13 @@ import { GrinderLocalError } from "./grinder-local.ts";
 import { DEFAULT_GRINDER } from "../shared/compass.ts";
 import { parseShotTargets } from "../shared/shot.ts";
 import { lastRecommendations, recommend } from "./recommend.ts";
-import { downloadImage, fetchRemoteImage, removeImage, saveDataUrl } from "./images.ts";
+import { downloadImage, fetchRemoteImage, removeImage, saveDataUrl, scheduleImagePrune } from "./images.ts";
 import { applyTimezone, ConfigError, configView, saveConfig } from "./config.ts";
 import { apiKey, model, scrape, ScrapeError, scrapeRecipes } from "./scrape.ts";
+import { followJob, getJob, listJobs, removeJob, startJob } from "./scrape-jobs.ts";
 import {
   batchInputSchema,
+  freezeSchema,
   brewInputSchema,
   coffeeInputSchema,
   coffeePatchSchema,
@@ -47,6 +50,27 @@ import type { RecommendEvent, ScrapeEvent, Settings } from "../shared/types.ts";
 
 const app = new Hono();
 const api = new Hono();
+
+// JSON-Routen höchstens 1 MB; Routen mit großen Körpern (Bilder, Decent, Auslesen) setzen ihr eigenes Limit
+const BIG_BODY = /^\/api\/(images$|decent\/(shots|files)$|scrape(\/jobs)?$)/;
+const smallBody = bodyLimit({ maxSize: 1024 * 1024, onError: (c) => c.json({ error: "Anfrage zu groß" }, 413) });
+api.use("*", (c, next) => (BIG_BODY.test(c.req.path) ? next() : smallBody(c, next)));
+// Nach jeder Änderung die Startwerte im Hintergrund neu rechnen (der Worker merkt die Änderung über data_version)
+api.use("*", async (c, next) => {
+  await next();
+  if (c.req.method !== "GET" && c.res.status < 400) warmGrind();
+});
+
+/** Zeitpunkt aus der Abfrage nur, wenn er lesbar und plausibel ist (sonst wirft toISOString später) */
+const queryTime = (c: Context, name: string) => {
+  const v = c.req.query(name);
+  const t = v ? Date.parse(v) : NaN;
+  return Number.isFinite(t) && t > Date.UTC(1990, 0, 1) && t < Date.UTC(2200, 0, 1) ? v : undefined;
+};
+const queryLimit = (c: Context) => {
+  const n = Math.trunc(Number(c.req.query("limit")));
+  return Number.isFinite(n) && n > 0 ? Math.min(n, 2000) : undefined;
+};
 
 const idParam = (c: Context) => {
   const n = Number(c.req.param("id"));
@@ -138,6 +162,14 @@ api.put("/batches/:id", async (c) => {
   if (b instanceof Response) return b;
   return id && store.updateBatch(id, b) ? c.json({ id }) : c.json({ error: "Charge nicht gefunden" }, 404);
 });
+api.post("/batches/:id/freeze", async (c) => {
+  const id = idParam(c);
+  const b = await body(c, freezeSchema);
+  if (b instanceof Response) return b;
+  if (!id) return c.json({ error: "Charge nicht gefunden" }, 404);
+  const err = store.freezeBatch(id, b.on, b.date);
+  return err ? c.json({ error: err }, err.includes("nicht gefunden") ? 404 : 400) : c.json({ id });
+});
 api.delete("/batches/:id", (c) => {
   const id = idParam(c);
   return id && store.deleteBatch(id) ? c.json({ ok: true }) : c.json({ error: "Charge nicht gefunden" }, 404);
@@ -187,10 +219,10 @@ api.get("/grinder/events", async (c) => {
   await syncGrinder();
   const hours = Number(c.req.query("hours"));
   const events = listGrinderEvents({
-    since: c.req.query("since"),
-    around: c.req.query("around"),
+    since: queryTime(c, "since"),
+    around: queryTime(c, "around"),
     hours: Number.isFinite(hours) && hours > 0 ? Math.min(hours, 72) : undefined,
-    limit: Number(c.req.query("limit")) || undefined,
+    limit: queryLimit(c),
   });
   return c.json({ events, status: grinderStatus() });
 });
@@ -267,10 +299,10 @@ api.get("/decent/profiles", (c) => {
 api.get("/decent/shots", (c) => {
   const hours = Number(c.req.query("hours"));
   const shots = listShots({
-    since: c.req.query("since"),
-    around: c.req.query("around"),
+    since: queryTime(c, "since"),
+    around: queryTime(c, "around"),
     hours: Number.isFinite(hours) && hours > 0 ? Math.min(hours, 72) : undefined,
-    limit: Number(c.req.query("limit")) || undefined,
+    limit: queryLimit(c),
   });
   return c.json({ shots, status: decentStatus() });
 });
@@ -394,6 +426,50 @@ api.post("/scrape", bodyLimit({ maxSize: 16 * 1024 * 1024 }), async (c) => {
   }
 });
 
+// Auslesen im Hintergrund: Auftrag anlegen, Liste, Verlauf als NDJSON (erst der bisherige Stand, dann live), abbrechen/verwerfen
+api.post("/scrape/jobs", bodyLimit({ maxSize: 16 * 1024 * 1024 }), async (c) => {
+  const b = await body(c, scrapeInputSchema);
+  if (b instanceof Response) return b;
+  if (!apiKey().key) return c.json({ error: "Kein API-Key hinterlegt. Bitte in den Einstellungen eintragen oder manuell erfassen." }, 400);
+  try {
+    return c.json(await startJob(b), 201);
+  } catch (e) {
+    return c.json({ error: e instanceof Error ? e.message : "Auslesen nicht gestartet" }, 400);
+  }
+});
+
+api.get("/scrape/jobs", (c) => c.json(listJobs()));
+
+api.get("/scrape/jobs/:id", (c) => {
+  const id = c.req.param("id");
+  if (!getJob(id)) return c.json({ error: "Auslesen nicht gefunden (abgelaufen oder Server neu gestartet)" }, 404);
+  c.header("content-type", "application/x-ndjson; charset=utf-8");
+  c.header("cache-control", "no-cache, no-transform");
+  c.header("x-accel-buffering", "no");
+  return stream(c, async (s) => {
+    let chain: Promise<unknown> = Promise.resolve();
+    let closed = false;
+    const f = followJob(id, (e) => {
+      if (closed) return;
+      chain = chain.then(() => s.writeln(JSON.stringify(e))).catch(() => (closed = true));
+    });
+    if (!f) return;
+    // Ping gegen den Proxy-Timeout, solange Claude still arbeitet
+    const ping = setInterval(() => {
+      if (!closed) chain = chain.then(() => s.writeln("")).catch(() => (closed = true));
+    }, 15_000);
+    s.onAbort(() => {
+      closed = true;
+      f.stop();
+    });
+    await f.done;
+    clearInterval(ping);
+    await chain;
+  });
+});
+
+api.delete("/scrape/jobs/:id", (c) => (removeJob(c.req.param("id")) ? c.body(null, 204) : c.json({ error: "Nicht gefunden" }, 404)));
+
 // Nur die Röster-Rezepte eines erfassten Kaffees von der Shopseite holen (speichert nichts)
 api.post("/scrape/recipes", async (c) => {
   const b = await body(c, recipesScrapeSchema);
@@ -475,21 +551,22 @@ api.put("/settings", async (c) => {
 
 api.get("/stats", (c) => c.json(store.stats()));
 // Startwert für den Mahlgrad einer Tüte (Mahlkompass plus lokales Modell aus den gelungenen Bezügen) und Vorlage für einen ersten Bezug
-api.get("/grind", (c) => {
+api.get("/grind", async (c) => {
   const coffee_id = Number(c.req.query("coffee_id"));
   const batch_id = Number(c.req.query("batch_id")) || null;
   const method = (c.req.query("method") ?? "").slice(0, 60);
   if (!Number.isInteger(coffee_id) || coffee_id <= 0 || !method) return c.json({ error: "coffee_id und method angeben" }, 400);
-  const today = (c.req.query("today") ?? new Date().toISOString()).slice(0, 10);
+  const q = c.req.query("today");
+  const today = q && /^\d{4}-\d{2}-\d{2}$/.test(q) ? q : store.localToday();
   return c.json({
-    prediction: predictGrind({ coffee_id, batch_id, method, grinder: (c.req.query("grinder") ?? "").slice(0, 80), today }),
+    prediction: await predictGrindAsync({ coffee_id, batch_id, method, grinder: (c.req.query("grinder") ?? "").slice(0, 80), today }),
     template: brewTemplate(method),
   });
 });
 api.get("/stock", (c) => c.json(store.listStock()));
 api.get("/brews", (c) => c.json(store.brewLog()));
 api.get("/export", (c) => {
-  c.header("content-disposition", `attachment; filename="kaffeebibliothek-${new Date().toISOString().slice(0, 10)}.json"`);
+  c.header("content-disposition", `attachment; filename="kaffeebibliothek-${store.localToday()}.json"`);
   return c.json(store.exportAll());
 });
 
@@ -506,7 +583,7 @@ function sendFile(c: Context, file: string, name: string, size: number, after?: 
 }
 api.get("/backup", async (c) => {
   const now = new Date();
-  const stamp = `${now.toISOString().slice(0, 10)}-${String(now.getHours()).padStart(2, "0")}${String(now.getMinutes()).padStart(2, "0")}`;
+  const stamp = `${store.localToday(now)}-${String(now.getHours()).padStart(2, "0")}${String(now.getMinutes()).padStart(2, "0")}`;
   const tmp = path.join(DATA_DIR, `.download-${process.pid}-${Date.now()}.zip`);
   await writeBackup(tmp);
   const { size } = await stat(tmp);
@@ -563,6 +640,7 @@ if (existsSync(WEB_DIST)) {
 
 applyTimezone();
 scheduleBackups();
+scheduleImagePrune();
 scheduleGrinderSync();
 
 const port = Number(process.env.PORT ?? 8790);

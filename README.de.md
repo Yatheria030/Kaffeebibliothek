@@ -55,17 +55,18 @@ beides zu einem Bezug und sagt dir für den nächsten Shot, wo der Mahlgrad hin 
 
 ### Bibliothek
 - Regal mit freigestellten Packungsbildern oder kompakte Liste, hell und dunkel
-- Ansichten in der Seitenleiste: **Alle**, **Gerade offen**, **Lager**, **Aufgebraucht**, **Merkliste**, **Archiv**
+- Ansichten in der Seitenleiste: **Alle**, **Gerade offen**, **Lager**, **Aufgebraucht**, **Gesehen**, **Archiv**
 - Filter nach Röstgrad, „Geröstet für“ (Filter, Espresso, Omni), Herkunftsland, Geschmack und Mindest-Score
 - Suche (Taste <kbd>/</kbd>), Sortierung nach zuletzt getrunken, bestem Score, Name, Röstdatum oder zuletzt hinzugefügt
 - „Zuletzt angesehen“ in der Seitenleiste, Filter bleiben gespeichert
 - Kaffee hinzufügen per Knopf oder einfach Bild bzw. Link auf die Seite ziehen
-- Merkliste für Kaffees, die du probieren willst: Sie ziehen mit der ersten Packung in die Bibliothek um
+- „Gesehen“ für Kaffees, die dir irgendwo begegnet sind: Sie ziehen mit der ersten Packung in die Bibliothek um
 
 <img src="docs/screenshots/bibliothek-dunkel.jpg" alt="Bibliothek dunkel" width="900">
 
 ### Kaffee erfassen
 - Auslesen per **Shop-Link, Name oder Foto**: Websuche, gelesene Seiten und fertige Felder erscheinen live
+- Oder **im Hintergrund**: weiter in der App stöbern, unten rechts steht der Fortschritt, eine Meldung sagt, wann er fertig ist
 - Erfasst Rösterei, Herkunft (Land, Region, Farm, Produzent, Höhe), Varietäten, Aufbereitung mit Zusatz (Fermentation,
   Trocknung, Honey-Farbe, Decaf-Verfahren), Röstgrad, „Geröstet für“, Aromen, Cup Score, Packung und Preis
 - **Röster-Rezepte** von der Shopseite übernehmen
@@ -74,7 +75,9 @@ beides zu einem Bezug und sagt dir für den nächsten Shot, wo der Mahlgrad hin 
   Packungen gleich groß im Regal. Feinschliff im Bild-Editor „Ausrichten“ mit Hilfsraster
 - Ohne API-Key geht alles von Hand
 
-<img src="docs/screenshots/auslesen.gif" alt="Live-Auslesen: Websuche, gelesene Seiten und Felder füllen sich" width="640">
+| Live | Im Hintergrund |
+|---|---|
+| <img src="docs/screenshots/auslesen.gif" alt="Live-Auslesen: Websuche, gelesene Seiten und Felder füllen sich" width="440"> | <img src="docs/screenshots/hintergrund.gif" alt="Auslesen im Hintergrund: Fortschritt unten rechts, Meldung wenn fertig" width="440"> |
 
 ### Kaffee-Detail
 - Kennzahlen: bester Score, Bezüge, Tage seit Röstung mit Frische-Zustand, gelungene Bezüge bzw. Ø Sterne
@@ -129,6 +132,10 @@ beides zu einem Bezug und sagt dir für den nächsten Shot, wo der Mahlgrad hin 
   für Filter, Espresso und Omni × hell, mittel, dunkel, in den Einstellungen anpassbar
 - Sortiert nach Dringlichkeit, oben steht **„Als Nächstes öffnen“**
 - Ohne Röstdatum, „Geröstet für“ oder Röstgrad heißt es „nicht bewertbar“, nie geraten
+- **Gefrierfach** je Packung: einfrieren und auftauen mit Datum, die Tage im Gefrierfach zählen nicht zum Röstalter.
+  Eingefrorene Packungen stehen in einem eigenen Abschnitt mit dem Trinkfenster „wenn heute aufgetaut“
+- **„Einfrieren empfohlen“** für jede ungeöffnete Packung nach der nächsten, ruhende erst nach ihrer Ruhezeit. Beim Auftauen
+  nennt die App die Auftauzeit nach Packungsgröße
 
 | Hell | Dunkel |
 |---|---|
@@ -150,7 +157,7 @@ beides zu einem Bezug und sagt dir für den nächsten Shot, wo der Mahlgrad hin 
 - **Kosten**: €/kg, Preis je Tasse, Ausgaben je Monat, Preis je Rösterei, „Teuer gleich besser?“
 - Verteilung nach Herkunft (mit **Weltkarte**, Klick filtert die Bibliothek), Aufbereitung, Röstgrad und Methode
 - **Was passt zu mir?**: Geschmacksprofil aus deinen Bewertungen. Auf Wunsch sucht die Anthropic-API in den Shops deiner
-  Röstereien nach passenden Kaffees, „Auf die Merkliste“ mit einem Klick
+  Röstereien nach passenden Kaffees, „Unter Gesehen ablegen“ mit einem Klick
 
 | Hell | Dunkel |
 |---|---|
@@ -213,6 +220,8 @@ Was im Hintergrund passiert, damit es sich vorne einfach anfühlt.
 ### Auslesen
 - Die Antwort der Anthropic-API wird als **NDJSON-Stream** an die Oberfläche durchgereicht: Websuche, gelesene Seiten und halbfertige
   Felder erscheinen live, noch bevor das Modell fertig ist
+- Jedes Auslesen ist ein **Auftrag im Server**: Neu laden, Seite wechseln oder Handy sperren unterbricht es nicht, beim Öffnen wird
+  der bisherige Verlauf nachgespielt
 - Strukturierte Ausgabe über ein Tool (`save_coffee`), validiert mit zod. Bekannte Röstereien bekommt das Modell mit, damit
   Schreibweisen zusammenfinden
 - Röstereinamen werden ohne Füllwörter (Rösterei, Coffee, GmbH), Leerzeichen und Akzente verglichen, Aufbereitungen auf
@@ -227,7 +236,8 @@ Was im Hintergrund passiert, damit es sich vorne einfach anfühlt.
 - **Steigung k** (µm je Sekunde) mit Vorwissen je Mühle, aus Shot-Paaren derselben Tüte nachgeschärft. Die Tage seit dem ersten
   Shot gehen als zweite Größe ein, sonst würde die Alterung der Bohnen im Hopper k verfälschen
 - Bezugszeiten werden aufs Zielverhältnis umgerechnet, damit ein 1:2,3 und ein 1:2 vergleichbar sind
-- Das gelernte Modell bleibt im Speicher, bis sich die Datenbank ändert (`total_changes()` und `data_version`)
+- Das gelernte Modell bleibt im Speicher, bis sich die Datenbank ändert (`total_changes()` und `data_version`). Gerechnet wird in
+  einem eigenen Worker-Thread, der Server antwortet währenddessen weiter, nach Änderungen wird vorgerechnet
 
 ### Mühle und Maschine
 - **Mahlkönig E64 WS im Heimnetz**: Die App lädt die SQLite-Datenbank der Mühle über deren Weboberfläche und liest daraus
@@ -246,6 +256,9 @@ Was im Hintergrund passiert, damit es sich vorne einfach anfühlt.
 - **Sicherung** als selbst gebautes ZIP (zlib), mit `VACUUM INTO` für einen stimmigen Stand der Datenbank im laufenden Betrieb
 - **Einstellungen** mit klarer Reihenfolge: Wert in der App, sonst Umgebung, sonst eingebauter Standard. Timer takten bei Änderung neu
 - Schlüssel und Passwörter verlassen den Server nie, die API zeigt nur einen Hinweis wie `…a1b2`
+- Eingaben werden geprüft (Datum, Zeitpunkte, Größe von Anfragen und Bildern). Bilder von Links lädt der Server nur aus dem
+  öffentlichen Internet und prüft jede Weiterleitung
+- Tage zählen in der Ortszeit, ein Bezug um 0:30 gehört zum neuen Tag
 
 ### Oberfläche
 - React 19, TanStack Query, Hash-Router. Links auf einen Kaffee laden das Detail schon bei Maus, Fokus oder Antippen vor

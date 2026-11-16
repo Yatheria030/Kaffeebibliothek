@@ -1,16 +1,40 @@
 import { GRINDERS, NO_GRINDER } from "../shared/compass.ts";
 import { z } from "zod";
 import { TIME_RE } from "../shared/config.ts";
+import { tenth } from "../shared/shot.ts";
 
 z.config(z.locales.de());
 
 const text = (max = 500) => z.string().trim().max(max).default("");
 const num = z.number().finite().nullable().default(null);
-const isoDate = z
+// Rückprobe: „2026-02-31“ hätte Date.parse still zum 3. März gemacht
+const day = z
   .string()
   .regex(/^\d{4}-\d{2}-\d{2}$/)
-  .nullable()
-  .default(null);
+  .refine((s) => !Number.isNaN(Date.parse(s)) && new Date(s).toISOString().slice(0, 10) === s, "kein gültiges Datum");
+const isoDate = day.nullable().default(null);
+/** Zeiten im Gefrierfach: aufsteigend, ohne Überlappung, höchstens die letzte noch offen */
+const freezes = z
+  .array(z.object({ from: day, to: day.nullable().default(null) }))
+  .max(50)
+  .superRefine((a, ctx) => {
+    a.forEach((f, i) => {
+      if (f.to && f.to < f.from) ctx.addIssue({ code: "custom", message: "Gefrierfach: „Aufgetaut“ liegt vor „Eingefroren“", path: [i] });
+      if (!f.to && i < a.length - 1) ctx.addIssue({ code: "custom", message: "Gefrierfach: nur der letzte Zeitraum darf offen sein", path: [i] });
+      const prev = a[i - 1];
+      if (prev?.to && f.from < prev.to) ctx.addIssue({ code: "custom", message: "Gefrierfach: Zeiträume überschneiden sich", path: [i] });
+    });
+  });
+/** Zeitpunkt, gespeichert immer als UTC-ISO (Sortierung und Paarung vergleichen Strings) */
+const instant = z
+  .string()
+  .min(10)
+  .max(40)
+  .refine((s) => {
+    const t = Date.parse(s);
+    return Number.isFinite(t) && t > Date.UTC(1990, 0, 1) && t < Date.UTC(2200, 0, 1);
+  }, "kein gültiger Zeitpunkt")
+  .transform((s) => new Date(s).toISOString());
 
 export const roasterRecipeSchema = z.object({
   title: text(80),
@@ -109,8 +133,11 @@ export const batchInputSchema = z.object({
   price_eur: z.number().nonnegative().max(100_000).nullable().default(null),
   status: z.enum(["ungeoeffnet", "offen", "leer"]).default("offen"),
   backfilled: z.boolean().default(false),
+  /** fehlt das Feld, bleiben die gespeicherten Zeiten (ältere Clients) */
+  freezes: freezes.optional(),
   note: text(1000),
 });
+export const freezeSchema = z.object({ on: z.boolean(), date: isoDate });
 
 export const recipeInputSchema = z.object({
   name: z.string().trim().min(1).max(120),
@@ -133,13 +160,14 @@ export const brewInputSchema = z
   coffee_id: z.number().int().positive(),
   batch_id: z.number().int().positive().nullable().default(null),
   recipe_id: z.number().int().positive().nullable().default(null),
-  brewed_at: z.string().min(10).max(40),
+  brewed_at: instant,
   dose_g: num,
   water_g: num,
   temp_c: num,
   grind: text(60),
-  time_s: z.number().int().nonnegative().max(86_400).nullable().default(null),
-  preinfusion_s: z.number().int().nonnegative().max(600).nullable().default(null),
+  // Zehntel wie von Mühle und Maschine geliefert
+  time_s: z.number().nonnegative().max(86_400).transform(tenth).nullable().default(null),
+  preinfusion_s: z.number().nonnegative().max(600).transform(tenth).nullable().default(null),
   grinder_event_id: z.number().int().positive().nullable().default(null),
   machine_shot_id: z.number().int().positive().nullable().default(null),
   kind: z.enum(["sca", "quick"]).default("sca"),

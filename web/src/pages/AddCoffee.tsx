@@ -1,8 +1,20 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { CircleAlert, ImageUp, KeyRound, Link2, PenLine, RotateCcw, Sparkles } from "lucide-react";
+import { CircleAlert, ImageUp, KeyRound, Link2, Minimize2, PenLine, RotateCcw, Sparkles } from "lucide-react";
 import { useEffect, useRef, useState, type DragEvent } from "react";
-import { BATCH_CHOICES, emptyCoffeeFields, fromChoice, type BatchChoice, type CoffeeFields, type CoffeeSource, type ScrapeDraft, type ScrapeEvent, type ScrapePartial, type ScrapeStep } from "../../../shared/types.ts";
-import { api, ApiError, scrapeLive } from "../api.ts";
+import {
+  BATCH_CHOICES,
+  emptyCoffeeFields,
+  fromChoice,
+  type BatchChoice,
+  type CoffeeFields,
+  type CoffeeSource,
+  type ScrapeDraft,
+  type ScrapeEvent,
+  type ScrapeJob,
+  type ScrapePartial,
+  type ScrapeStep,
+} from "../../../shared/types.ts";
+import { api, ApiError, followScrapeJob, imageUrl } from "../api.ts";
 import { hostOf, todayIso } from "../lib/format.ts";
 import { fileToDataUrl } from "../lib/image.ts";
 import { lastLibraryPath, navigate } from "../lib/router.ts";
@@ -11,6 +23,7 @@ import { Banner, Button, Card, cx, Segmented } from "../ui/controls.tsx";
 import { Group, Row } from "../ui/form.tsx";
 import { toast } from "../ui/overlay.tsx";
 import { ScrapeLive } from "../ui/ScrapeLive.tsx";
+import { askNotify, jobPath, JOBS_KEY, toBackground } from "../ui/ScrapeJobs.tsx";
 import { BackLink, LargeTitle, Page, Toolbar } from "../ui/Shell.tsx";
 import { asUrl } from "./Library.tsx";
 import { CoffeeFieldsForm, cleanFields, colorFor, ImagePicker, resolveImage, type ImageChoice } from "./CoffeeForm.tsx";
@@ -49,7 +62,19 @@ function reduceLive(l: Live, e: ScrapeEvent): Live {
   }
 }
 
-export function AddCoffee() {
+/** Foto für ein erneutes Auslesen: data-URL bleibt, eine Datei unter /images wird wieder zur data-URL */
+async function photoData(src: string): Promise<string> {
+  if (src.startsWith("data:")) return src;
+  const res = await fetch(src);
+  if (!res.ok) throw new Error("Foto nicht mehr da, bitte neu wählen");
+  return fileToDataUrl(await res.blob());
+}
+
+/**
+ * Kaffee hinzufügen. Auslesen läuft als Auftrag im Server (`server/scrape-jobs.ts`): `job` in der Adresse (`#/neu?job=…`) zeigt
+ * dessen Verlauf, wer die Seite verlässt, lässt ihn im Hintergrund weiterlaufen (Dock unten rechts, `ui/ScrapeJobs.tsx`).
+ */
+export function AddCoffee({ job }: { job: string | null }) {
   const qc = useQueryClient();
   const settings = useQuery({ queryKey: ["settings"], queryFn: api.settings });
   const hasKey = settings.data?.api_key.set ?? false;
@@ -66,6 +91,9 @@ export function AddCoffee() {
   const [drag, setDrag] = useState(false);
   const fileRef = useRef<HTMLInputElement>(null);
   const abortRef = useRef<AbortController | null>(null);
+  /** Auftrag, den diese Seite gerade zeigt */
+  const jobRef = useRef<string | null>(null);
+  const [starting, setStarting] = useState<"live" | "background" | null>(null);
 
   // Formularzustand
   const [fields, setFields] = useState<CoffeeFields>(emptyCoffeeFields);
@@ -73,7 +101,7 @@ export function AddCoffee() {
   const [candidates, setCandidates] = useState<ImageChoice[]>([]);
   const [draft, setDraft] = useState<ScrapeDraft | null>(null);
   const [source, setSource] = useState<CoffeeSource | null>(null);
-  const [buy, setBuy] = useState<"gekauft" | "merkliste">(pending?.wishlist ? "merkliste" : "gekauft");
+  const [buy, setBuy] = useState<"gekauft" | "gesehen">(pending?.wishlist ? "gesehen" : "gekauft");
   const [roastDate, setRoastDate] = useState("");
   // Röstdatum bleibt leer, bis man es einträgt; „Nachgetragen“ = alte, aufgebrauchte Packung mit unbekannten Daten
   const [batchChoice, setBatchChoice] = useState<BatchChoice>("offen");
@@ -102,18 +130,20 @@ export function AddCoffee() {
     setImage(cands[0] ?? null);
   };
 
-  const run = async (input: ScrapeInput) => {
+  /** Einem Auftrag folgen: bisheriger Stand kommt sofort, danach live; fertig geht es ins Formular */
+  const follow = async (j: Pick<ScrapeJob, "id" | "what" | "started" | "photo" | "state">) => {
     abortRef.current?.abort();
     const ac = new AbortController();
     abortRef.current = ac;
-    const what = input.url ? hostOf(input.url) : input.name ? `„${input.name}“` : "das Foto";
+    jobRef.current = j.id;
     setLive(NO_LIVE);
-    setStep({ s: "loading", started: Date.now(), what, photo: input.image ?? null });
+    setStep({ s: "loading", started: j.started, what: j.what, photo: j.photo ? imageUrl(j.photo) : null });
     try {
-      const d = await scrapeLive(input, (e) => !ac.signal.aborted && setLive((l) => reduceLive(l, e)), ac.signal);
+      const d = await followScrapeJob(j.id, (e) => !ac.signal.aborted && setLive((l) => reduceLive(l, e)), ac.signal);
       if (ac.signal.aborted) return;
-      // Kurz das fertige Ergebnis zeigen, dann ins Formular
-      await new Promise((r) => setTimeout(r, window.matchMedia("(prefers-reduced-motion: reduce)").matches ? 0 : 900));
+      // Kurz das fertige Ergebnis zeigen, dann ins Formular (nicht, wenn er schon fertig war)
+      const pause = j.state !== "run" || window.matchMedia("(prefers-reduced-motion: reduce)").matches ? 0 : 900;
+      await new Promise((r) => setTimeout(r, pause));
       if (ac.signal.aborted) return;
       applyDraft(d);
       setStep({ s: "form" });
@@ -121,9 +151,85 @@ export function AddCoffee() {
     } catch (e) {
       if (ac.signal.aborted || (e instanceof DOMException && e.name === "AbortError")) return;
       const uploaded = e instanceof ApiError && typeof e.data.uploaded_image === "string" ? e.data.uploaded_image : null;
+      if (uploaded && !photo) setPhoto(imageUrl(uploaded));
       setStep({ s: "error", message: e instanceof Error ? e.message : String(e), uploaded });
     }
   };
+
+  /** Auftrag weg (gesichert, verworfen, abgebrochen) */
+  const dropJob = (id = jobRef.current) => {
+    if (!id) return;
+    if (jobRef.current === id) jobRef.current = null;
+    qc.setQueryData<ScrapeJob[]>(JOBS_KEY, (l) => l?.filter((x) => x.id !== id));
+    void api.removeScrapeJob(id).catch(() => {});
+  };
+
+  /** Neuen Auftrag starten; live folgt ihm hier, im Hintergrund geht es zurück zur Bibliothek */
+  const run = async (input: ScrapeInput, background = false) => {
+    if (background) askNotify();
+    setStarting(background ? "background" : "live");
+    try {
+      const body = input.image ? { image: await photoData(input.image) } : input;
+      const j = await api.startScrapeJob(body);
+      dropJob(); // ein fehlgeschlagener Vorgänger hat sich damit erledigt
+      qc.setQueryData<ScrapeJob[]>(JOBS_KEY, (l) => [j, ...(l ?? [])]);
+      void qc.invalidateQueries({ queryKey: JOBS_KEY });
+      if (background) {
+        toBackground(lastLibraryPath());
+        return;
+      }
+      jobRef.current = j.id;
+      navigate(jobPath(j.id), { replace: true });
+      void follow(j);
+    } catch (e) {
+      const uploaded = e instanceof ApiError && typeof e.data.uploaded_image === "string" ? e.data.uploaded_image : null;
+      setStep({ s: "error", message: e instanceof Error ? e.message : String(e), uploaded });
+    } finally {
+      setStarting(null);
+    }
+  };
+
+  // Auftrag aus der Adresse (Dock, Meldung, neu geladen): Eingaben von dort übernehmen und folgen
+  useEffect(() => {
+    if (job === jobRef.current) return;
+    if (!job) {
+      // Ohne Auftrag in der Adresse (z. B. erneut „Hinzufügen“): frisch beginnen
+      abortRef.current?.abort();
+      jobRef.current = null;
+      setStep({ s: "input" });
+      return;
+    }
+    jobRef.current = job;
+    let gone = false;
+    void qc.fetchQuery({ queryKey: JOBS_KEY, queryFn: api.scrapeJobs, staleTime: 0 }).then(
+      (list) => {
+        if (gone || jobRef.current !== job) return;
+        const j = list.find((x) => x.id === job);
+        if (!j) {
+          jobRef.current = null;
+          navigate("/neu", { replace: true });
+          setStep({ s: "error", message: "Dieses Auslesen gibt es nicht mehr (abgelaufen oder der Server wurde neu gestartet).", uploaded: null });
+          return;
+        }
+        if ("url" in j.input) {
+          setMode("link");
+          setUrl(j.input.url);
+        } else if ("name" in j.input) {
+          setMode("name");
+          setName(j.input.name);
+        } else if (j.photo) {
+          setMode("foto");
+          setPhoto(imageUrl(j.photo));
+        }
+        void follow(j);
+      },
+      (e: unknown) => !gone && setStep({ s: "error", message: e instanceof Error ? e.message : String(e), uploaded: null }),
+    );
+    return () => {
+      gone = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [job]);
 
   // Aus der Bibliothek übergeben: direkt auslesen, sobald klar ist, dass ein Key da ist
   const autoStarted = useRef(false);
@@ -138,6 +244,10 @@ export function AddCoffee() {
 
   const manual = (uploaded: string | null = null) => {
     abortRef.current?.abort();
+    if (jobRef.current) {
+      dropJob();
+      navigate("/neu", { replace: true });
+    }
     const f = emptyCoffeeFields();
     const u = asUrl(url);
     if (mode === "name" && name.trim()) f.name = name.trim();
@@ -145,7 +255,13 @@ export function AddCoffee() {
     setFields(f);
     setDraft(null);
     setSource({ kind: "manual", input: mode === "link" ? (u ?? "") : mode === "name" ? name.trim() : "", at: new Date().toISOString() });
-    const img: ImageChoice = uploaded ? { kind: "file", file: uploaded } : mode === "foto" && photo ? { kind: "data", data: photo } : null;
+    const img: ImageChoice = uploaded
+      ? { kind: "file", file: uploaded }
+      : mode === "foto" && photo
+        ? photo.startsWith("/images/")
+          ? { kind: "file", file: photo.slice("/images/".length) }
+          : { kind: "data", data: photo }
+        : null;
     setCandidates(img ? [img] : []);
     setImage(img);
     setStep({ s: "form" });
@@ -184,7 +300,7 @@ export function AddCoffee() {
         ...clean,
         image: file,
         color,
-        wishlist: buy === "merkliste",
+        wishlist: buy === "gesehen",
         archived: false,
         source,
         first_batch:
@@ -201,7 +317,8 @@ export function AddCoffee() {
         qc.invalidateQueries({ queryKey: ["coffees"] }),
         qc.invalidateQueries({ queryKey: ["stats"] }),
       ]);
-      toast(buy === "merkliste" ? "Auf die Merkliste gesetzt" : "Kaffee hinzugefügt");
+      dropJob();
+      toast(buy === "gesehen" ? "Unter Gesehen abgelegt" : "Kaffee hinzugefügt");
       navigate(`/kaffee/${id}`, { replace: true });
     } catch (e) {
       toast(e instanceof Error ? e.message : "Speichern fehlgeschlagen", "error");
@@ -212,6 +329,15 @@ export function AddCoffee() {
 
   const input = currentInput();
 
+  /** Formular verwerfen: der Auftrag dahinter ist damit erledigt */
+  const restart = () => {
+    if (jobRef.current) {
+      dropJob();
+      navigate("/neu", { replace: true });
+    }
+    setStep({ s: "input" });
+  };
+
   // ---------- Formular ----------
   if (step.s === "form") {
     return (
@@ -219,7 +345,7 @@ export function AddCoffee() {
         <Toolbar tab="Kaffee hinzufügen">
           <BackLink to={lastLibraryPath()}>Bibliothek</BackLink>
           <div className="flex-1" />
-          <Button variant="plain" size="sm" icon={RotateCcw} onClick={() => setStep({ s: "input" })} className="max-sm:hidden">
+          <Button variant="plain" size="sm" icon={RotateCcw} onClick={restart} className="max-sm:hidden">
             Neu beginnen
           </Button>
           <Button variant="primary" size="sm" loading={saving} onClick={() => void save()}>
@@ -261,13 +387,13 @@ export function AddCoffee() {
             <Group title="Status" footer={buy === "gekauft" ? "Die erste Charge übernimmt Gewicht und Preis aus „Packung“." : undefined}>
               <div className="p-3">
                 <Segmented
-                  label="Gekauft oder Merkliste"
+                  label="Gekauft oder nur gesehen"
                   full
                   value={buy}
                   onChange={setBuy}
                   options={[
                     { id: "gekauft", label: "Gekauft" },
-                    { id: "merkliste", label: "Merkliste" },
+                    { id: "gesehen", label: "Gesehen" },
                   ]}
                 />
               </div>
@@ -289,7 +415,7 @@ export function AddCoffee() {
                 </>
               ) : (
                 <p className="m-0 px-4 py-3 text-[13px] text-ink2">
-                  Landet auf der Merkliste. Sobald du eine Charge einträgst, zieht er in die Bibliothek um.
+                  Landet unter Gesehen. Sobald du eine Charge einträgst, zieht er in die Bibliothek um.
                 </p>
               )}
             </Group>
@@ -298,7 +424,7 @@ export function AddCoffee() {
             <ImagePicker value={image} onChange={setImage} candidates={candidates} color={null} roast={fields.roast_level} />
 
             <div className="flex justify-end gap-2">
-              <Button onClick={() => setStep({ s: "input" })}>Neu beginnen</Button>
+              <Button onClick={restart}>Neu beginnen</Button>
               <Button type="submit" variant="primary" loading={saving}>
                 Sichern
               </Button>
@@ -343,8 +469,9 @@ export function AddCoffee() {
             {...live}
             onCancel={() => {
               abortRef.current?.abort();
-              setStep({ s: "input" });
+              restart();
             }}
+            onBackground={() => toBackground(lastLibraryPath())}
           />
         ) : (
           <Card>
@@ -352,7 +479,7 @@ export function AddCoffee() {
               className="flex flex-col gap-5"
               onSubmit={(e) => {
                 e.preventDefault();
-                if (input && hasKey) void run(input);
+                if (input && hasKey && !starting) void run(input);
               }}
             >
               <Segmented
@@ -445,9 +572,21 @@ export function AddCoffee() {
                 <Button variant="plain" icon={PenLine} onClick={() => manual(step.s === "error" ? step.uploaded : null)}>
                   Manuell erfassen
                 </Button>
-                <Button type="submit" variant="primary" size="lg" icon={Sparkles} disabled={!input || !hasKey}>
-                  {step.s === "error" ? "Erneut auslesen" : "Auslesen"}
-                </Button>
+                <span className="flex flex-wrap items-center justify-end gap-2">
+                  <Button
+                    size="lg"
+                    icon={Minimize2}
+                    disabled={!input || !hasKey || starting != null}
+                    loading={starting === "background"}
+                    onClick={() => input && void run(input, true)}
+                    title="Liest im Hintergrund, du kannst weiter in der App stöbern und wirst gemeldet, wenn er fertig ist"
+                  >
+                    Im Hintergrund
+                  </Button>
+                  <Button type="submit" variant="primary" size="lg" icon={Sparkles} disabled={!input || !hasKey || starting != null} loading={starting === "live"}>
+                    {step.s === "error" ? "Erneut auslesen" : "Auslesen"}
+                  </Button>
+                </span>
               </div>
             </form>
           </Card>

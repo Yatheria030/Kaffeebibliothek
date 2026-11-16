@@ -215,12 +215,13 @@ export type CoffeeListItem = Coffee & {
   open_batch: {
     id: number;
     roast_date: string | null;
+    freezes: Freeze[];
   } | null;
 };
 
 /** Charge im Lager (ungeöffnet) mit dem, was die Lager-Seite vom Kaffee braucht */
 export type StockItem = Batch & {
-  coffee: Pick<Coffee, "id" | "name" | "roaster" | "image" | "color" | "roast_level" | "roast_for">;
+  coffee: Pick<Coffee, "id" | "name" | "roaster" | "image" | "color" | "roast_level" | "roast_for" | "weight_g">;
 };
 
 export type Batch = {
@@ -232,10 +233,15 @@ export type Batch = {
   price_eur: number | null;
   status: BatchStatus;
   backfilled: boolean;
+  /** Zeiten im Gefrierfach (YYYY-MM-DD, `to` leer = liegt noch drin), zählen nicht zum Röstalter */
+  freezes: Freeze[];
   note: string;
   created_at: string;
   brew_count: number;
 };
+
+/** Ein Aufenthalt im Gefrierfach; bei -18 °C altert der Kaffee praktisch nicht, die Tage zählen nicht mit */
+export type Freeze = { from: string; to: string | null };
 
 export type Recipe = {
   id: number;
@@ -311,7 +317,7 @@ export type CoffeeDetail = {
   batches: Batch[];
   brews: Brew[];
   recipes: Recipe[];
-  /** Decent-Profil des Kaffees (nicht auf der Merkliste) */
+  /** Decent-Profil des Kaffees (nicht unter „Gesehen“) */
   decent_profile?: CoffeeProfile | null;
 };
 
@@ -347,6 +353,26 @@ export type ScrapeEvent =
   | { t: "images"; urls: string[] }
   | { t: "done"; draft: ScrapeDraft }
   | { t: "error"; message: string; status: number; uploaded_image: string | null };
+
+/** Auslese-Auftrag im Server (`server/scrape-jobs.ts`), läuft auch ohne offene Seite weiter */
+export type ScrapeJobInput = { url: string } | { name: string } | { image: true };
+export type ScrapeJob = {
+  id: string;
+  /** Kurz für die Anzeige: Shop-Host, Name in Anführungszeichen oder „das Foto“ */
+  what: string;
+  input: ScrapeJobInput;
+  /** Hochgeladenes Foto (Datei unter /images) */
+  photo: string | null;
+  started: number;
+  finished: number | null;
+  state: "run" | "done" | "error";
+  name: string | null;
+  roaster: string | null;
+  image: string | null;
+  /** Gerade laufender Schritt */
+  activity: string | null;
+  error: string | null;
+};
 
 export type Settings = {
   api_key: { set: boolean; source: "env" | "db" | null; hint: string | null };
@@ -580,12 +606,49 @@ export function countryCode(country: string): string | null {
   return [...flag].map((ch) => String.fromCharCode(ch.codePointAt(0)! - 0x1f1e6 + 65)).join("");
 }
 
+/**
+ * Kalendertag eines Datums oder Zeitpunkts: reine Daten bleiben, Zeitpunkte (UTC-ISO) zählen in der Ortszeit (Browser bzw. TZ des
+ * Servers). Sonst wäre ein Bezug um 0:30 noch der Vortag
+ */
+export function localDay(iso: string): string {
+  if (iso.length <= 10 || !iso.includes("T")) return iso.slice(0, 10);
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return iso.slice(0, 10);
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+}
+
 export function daysBetween(fromIso: string | null, toIso: string): number | null {
   if (!fromIso) return null;
-  const a = Date.parse(fromIso.slice(0, 10));
-  const b = Date.parse(toIso.slice(0, 10));
+  const a = Date.parse(localDay(fromIso));
+  const b = Date.parse(localDay(toIso));
   if (!Number.isFinite(a) || !Number.isFinite(b)) return null;
   return Math.round((b - a) / 86_400_000);
+}
+
+/** Tage im Gefrierfach bis `at` (Tage; ein offener Aufenthalt zählt bis `at`) */
+export function frozenDays(freezes: readonly Freeze[] | undefined, at: string): number {
+  let n = 0;
+  const end = localDay(at);
+  for (const f of freezes ?? []) {
+    const to = f.to && f.to < end ? f.to : end;
+    n += Math.max(0, daysBetween(f.from, to) ?? 0);
+  }
+  return n;
+}
+
+/** Liegt die Tüte gerade im Gefrierfach? */
+export const isFrozen = (b: { freezes?: readonly Freeze[] }): boolean => (b.freezes ?? []).some((f) => !f.to);
+
+/** Seit wann sie gerade eingefroren ist */
+export const frozenSince = (b: { freezes?: readonly Freeze[] }): string | null => (b.freezes ?? []).find((f) => !f.to)?.from ?? null;
+
+/**
+ * Alter einer Tüte in Tagen bei `at`: Tage seit Röstung ohne die Tage im Gefrierfach. Überall statt `daysBetween(roast_date, …)` nehmen,
+ * wo es um das Altern des Kaffees geht (Trinkfenster, „Tag N“, Mahlgrad-Modell)
+ */
+export function bagAge(b: { roast_date: string | null; freezes?: readonly Freeze[] }, at: string): number | null {
+  const d = daysBetween(b.roast_date, at);
+  return d == null ? null : d - frozenDays(b.freezes, at);
 }
 
 /** Vorschlag von Claude für „Was passt zu mir?“ */
